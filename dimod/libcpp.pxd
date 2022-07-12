@@ -83,10 +83,12 @@ cdef extern from "dimod/quadratic_model.h" namespace "dimod" nogil:
         void add_quadratic(index_type, index_type, bias_type) except +
         void add_quadratic[T](const T dense[], index_type)
         void add_quadratic[ItRow, ItCol, ItBias](ItRow, ItCol, ItBias, index_type) except +
+        void add_quadratic_back(index_type, index_type, bias_type)
         index_type add_variable()
         const_quadratic_iterator cbegin_quadratic()
         const_quadratic_iterator cend_quadratic()
         void change_vartype(cppVartype)
+        bias_type energy[Iter](Iter sample_start)
         bint is_linear()
         bias_type& linear(index_type)
         const bias_type lower_bound(index_type)
@@ -133,11 +135,13 @@ cdef extern from "dimod/quadratic_model.h" namespace "dimod" nogil:
             bint operator!=(const_quadratic_iterator&)
 
         void add_quadratic(index_type, index_type, bias_type) except +
+        void add_quadratic_back(index_type, index_type, bias_type)
         index_type add_variable(cppVartype) except+
         index_type add_variable(cppVartype, bias_type, bias_type) except +
         const_quadratic_iterator cbegin_quadratic()
         void change_vartype(cppVartype, index_type) except +
         const_quadratic_iterator cend_quadratic()
+        bias_type energy[Iter](Iter sample_start)
         bint is_linear()
         bias_type& linear(index_type)
         const bias_type& lower_bound(index_type)

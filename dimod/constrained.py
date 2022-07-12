@@ -28,6 +28,7 @@ import uuid
 import warnings
 import zipfile
 
+from io import StringIO
 from numbers import Number
 from typing import Hashable, Optional, Union, BinaryIO, ByteString, Iterable, Collection, Dict
 from typing import Callable, MutableMapping, Iterator, Tuple, Mapping, Any, NamedTuple
@@ -43,7 +44,7 @@ from dimod.sym import Comparison, Eq, Le, Ge, Sense
 from dimod.serialization.fileview import SpooledTemporaryFile, _BytesIO
 from dimod.serialization.fileview import load, read_header, write_header
 from dimod.typing import Bias, Variable, SamplesLike
-from dimod.utilities import iter_safe_relabels, new_label
+from dimod.utilities import iter_safe_relabels, new_variable_label
 from dimod.variables import Variables, serialize_variable, deserialize_variable
 from dimod.vartypes import Vartype, as_vartype, VartypeLike
 
@@ -293,9 +294,9 @@ class ConstrainedQuadraticModel:
         if label is None:
             # we support up to 100k constraints and :6 gives us 16777216
             # possible so pretty safe
-            label = uuid.uuid4().hex[:6]
+            label = 'c' + uuid.uuid4().hex[:6]
             while label in self.constraints:
-                label = uuid.uuid4().hex[:6]
+                label = 'c' + uuid.uuid4().hex[:6]
         elif label in self.constraints:
             raise ValueError("a constraint with that label already exists")
 
@@ -1168,8 +1169,9 @@ class ConstrainedQuadraticModel:
             Upper limit -1.0
             Lower limit 1.0
         """
-
-        sample, labels = as_samples(sample_like)
+        # We go ahead and coerce to Variables for performance, since .energies() prefers
+        # that format
+        sample, labels = as_samples(sample_like, labels_type=Variables)
 
         if sample.shape[0] != 1:
             raise ValueError("sample_like should be a single sample, "
@@ -1668,13 +1670,13 @@ class ConstrainedQuadraticModel:
 
             if u not in mapping:
                 # we've never seen this integer before
-                new: Variable = new_label()
+                new: Variable = new_variable_label()
 
                 # on the off chance there are conflicts. Luckily self.variables
                 # is global accross all constraints/objective so we don't need
                 # to worry about accidentally picking something we'll regret
                 while new in self.constraints or new in self.variables:
-                    new = new_label()
+                    new = new_variable_label()
 
                 mapping[u] = new
 
@@ -1948,6 +1950,73 @@ class ConstrainedQuadraticModel:
 
         return obj
 
+    _STR_MAX_DISPLAY_ITEMS = 10
+
+    def __str__(self):
+        vartype_name = {Vartype.SPIN: 'Spin',
+                        Vartype.BINARY: 'Binary',
+                        Vartype.INTEGER: 'Integer',
+                        Vartype.REAL: 'Real'}
+
+        def var_encoder(v):
+            return f'{vartype_name[self.vartype(v)]}({v!r})'
+
+        sio = StringIO()
+
+        def render_limited_number(iterable, render_element):
+            tail_limit = self._STR_MAX_DISPLAY_ITEMS // 2
+            head_limit = self._STR_MAX_DISPLAY_ITEMS - tail_limit
+            limited = False
+            tail = []
+
+            for k, x in enumerate(iterable):
+                assert x is not None
+
+                if k < head_limit:
+                    render_element(x)
+                else:
+                    tail.append(x)
+
+                    if len(tail) > tail_limit:
+                        if not limited:
+                            sio.write('  ...\n')
+                            limited = True
+                        tail.pop(0)
+
+            while tail:
+                render_element(tail.pop(0))
+
+        def render_constraint(item):
+            label, c = item
+            sio.write(f'  {label}: ')
+            sio.write(c.to_polystring(encoder=var_encoder))
+            sio.write('\n')
+
+        def render_bound(v):
+            sio.write(f'  {self.lower_bound(v)} <= {var_encoder(v)} <= {self.upper_bound(v)}\n')
+
+        sio.write('Constrained quadratic model: ')
+        sio.write(f'{len(self.variables)} variables, ')
+        sio.write(f'{len(self.constraints)} constraints, ')
+        sio.write(f'{self.num_biases()} biases\n\n')
+
+        sio.write('Objective\n')
+        sio.write('  ')
+        sio.write(self.objective.to_polystring(encoder=var_encoder))
+        sio.write('\n')
+
+        sio.write('\n')
+        sio.write('Constraints\n')
+        render_limited_number(self.constraints.items(), render_constraint)
+
+        sio.write('\n')
+        sio.write('Bounds\n')
+        bound_vars = (v for v in self.variables
+                      if self.vartype(v) in (Vartype.INTEGER, Vartype.REAL))
+        render_limited_number(bound_vars, render_bound)
+
+        return sio.getvalue()
+
 
 CQM = ConstrainedQuadraticModel
 
@@ -2164,7 +2233,7 @@ def cqm_to_bqm(cqm: ConstrainedQuadraticModel, lagrange_multiplier: Optional[Bia
             bqm.add_linear_inequality_constraint(
                 ((v, lhs.get_linear(v)) for v in lhs.variables),
                 lagrange_multiplier,
-                new_label(),
+                new_variable_label(),
                 constant=lhs.offset,
                 lb=rhs,
                 ub=np.iinfo(np.int64).max,
@@ -2173,7 +2242,7 @@ def cqm_to_bqm(cqm: ConstrainedQuadraticModel, lagrange_multiplier: Optional[Bia
             bqm.add_linear_inequality_constraint(
                 ((v, lhs.get_linear(v)) for v in lhs.variables),
                 lagrange_multiplier,
-                new_label(),
+                new_variable_label(),
                 constant=lhs.offset,
                 lb=np.iinfo(np.int64).min,
                 ub=rhs,

@@ -21,6 +21,7 @@ cimport cython
 
 from cython.operator cimport preincrement as inc, dereference as deref
 from libc.math cimport ceil, floor
+from libc.string cimport memcpy
 from libcpp.vector cimport vector
 
 import dimod
@@ -105,17 +106,24 @@ cdef class cyQM_template(cyQMBase):
 
         return neighbors[:i]
 
-    def _ilower_triangle_load(self, Py_ssize_t vi, Py_ssize_t num_neighbors, buff):
-        dtype = np.dtype([('v', self.index_dtype), ('b', self.dtype)],
-                         align=False)
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def _ilower_triangle_load(self, Py_ssize_t vi, Py_ssize_t num_neighbors, const unsigned char[:] buff):
+        cdef Py_ssize_t index_itemsize = self.index_dtype.itemsize
+        cdef Py_ssize_t bias_itemsize = self.dtype.itemsize
+        cdef Py_ssize_t itemsize = index_itemsize + bias_itemsize
 
-        arr = np.frombuffer(buff[:dtype.itemsize*num_neighbors], dtype=dtype)
-        cdef const index_type[:] index_view = arr['v']
-        cdef const bias_type[:] bias_view = arr['b']
+        if num_neighbors*itemsize > buff.size:
+            raise RuntimeError
 
         cdef Py_ssize_t i
+        cdef index_type ui
+        cdef bias_type bias
         for i in range(num_neighbors):
-            self.cppqm.add_quadratic(vi, index_view[i], bias_view[i])
+            memcpy(&ui, &buff[i*itemsize], index_itemsize)
+            memcpy(&bias, &buff[i*itemsize+index_itemsize], bias_itemsize)
+
+            self.cppqm.add_quadratic_back(ui, vi, bias)
 
     @cython.boundscheck(False)
     @cython.wraparound(False)
@@ -362,29 +370,23 @@ cdef class cyQM_template(cyQMBase):
         cdef Py_ssize_t vi = self.variables.index(v)
         return self.cppqm.num_interactions(vi)
 
-    cdef np.float64_t[::1] _energies(self, ConstNumeric[:, ::1] samples, object labels):
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef np.float64_t[::1] _energies(self, ConstNumeric[:, ::1] samples, cyVariables labels):
         cdef Py_ssize_t num_samples = samples.shape[0]
         cdef Py_ssize_t num_variables = samples.shape[1]
 
-        if num_variables != len(labels):
+        if num_variables != labels.size():
             # as_samples should never return inconsistent sizes, but we do this
             # check because the boundscheck is off and we otherwise might get
             # segfaults
             raise RuntimeError("as_samples returned an inconsistent samples/variables")
 
-        # get the indices of the QM variables. Use -1 to signal that a
-        # variable's index has not yet been set
-        cdef Py_ssize_t[::1] qm_to_sample = np.full(self.num_variables(), -1, dtype=np.intp)
+        # get the indices of the QM variables
+        cdef Py_ssize_t[::1] qm_to_sample = np.empty(self.num_variables(), dtype=np.intp)
         cdef Py_ssize_t si
-        for si in range(num_variables):
-            v = labels[si]
-            if self.variables.count(v):
-                qm_to_sample[self.variables.index(v)] = si
-
-        # make sure that all of the QM variables are accounted for
         for si in range(self.num_variables()):
-            if qm_to_sample[si] == -1:
-                raise ValueError(f"missing variable {self.variables[si]!r} in sample(s)")
+            qm_to_sample[si] = labels.index(self.variables.at(si))
 
         cdef np.float64_t[::1] energies = np.empty(num_samples, dtype=np.float64)
 
@@ -409,7 +411,7 @@ cdef class cyQM_template(cyQMBase):
         return energies
 
     def energies(self, samples_like, dtype=None):
-        samples, labels = as_samples(samples_like)
+        samples, labels = as_samples(samples_like, labels_type=Variables)
 
         # we need contiguous and unsigned. as_samples actually enforces contiguous
         # but no harm in double checking for some future-proofness
