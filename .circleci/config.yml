@@ -17,7 +17,7 @@ jobs:
         type: string
 
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     environment:
       <<: *global-environment
@@ -44,7 +44,7 @@ jobs:
             python3 -m venv env
             . env/bin/activate
             pip install pip --upgrade
-            pip install cibuildwheel==2.4.0
+            pip install cibuildwheel==2.8.0
             cibuildwheel --output-dir dist
       - save_cache: &build-linux-save-cache
           paths:
@@ -87,7 +87,7 @@ jobs:
         type: string
 
     macos:
-      xcode: 13.2.0
+      xcode: 13.4.0
 
     environment:
       <<: *global-environment
@@ -98,7 +98,7 @@ jobs:
 
   build-sdist:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - checkout
@@ -124,6 +124,9 @@ jobs:
       <<: *global-environment
       CIBW_PROJECT_REQUIRES_PYTHON: ~=<< parameters.python-version>>
       CIBW_ARCHS_WINDOWS: AMD64
+      # use delvewheel on windows
+      CIBW_BEFORE_BUILD_WINDOWS: "pip install delvewheel"
+      CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "delvewheel repair -w {dest_dir} {wheel}"
 
     steps:
       - checkout
@@ -131,14 +134,14 @@ jobs:
           name: build wheels
           command: |
             python -m pip install pip --upgrade
-            python -m pip install cibuildwheel==2.4.0
+            python -m pip install cibuildwheel==2.8.0
             python -m cibuildwheel --output-dir dist
       - store_artifacts: *store-artifacts
       - persist_to_workspace: *persist-to-workspace
 
   deploy-all:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - attach_workspace:
@@ -157,7 +160,7 @@ jobs:
 
   test-airspeed-velocity:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - checkout
@@ -180,14 +183,15 @@ jobs:
   # suffices to just do it once
   test-codecov:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - checkout
       - run:
           name: run c++ coverage
           command: |
-            sudo apt-get install lcov
+            sudo apt update
+            sudo apt install lcov
             make -C testscpp/ catch2 coverage
       - run:
           name: run python coverage
@@ -205,13 +209,13 @@ jobs:
 
   test-doctest:
     docker:
-      - image: circleci/python:3.7 # as of march 2019 RTD uses 3.7
+      - image: cimg/python:3.7 # as of may 2022 RTD uses 3.7
 
     steps:
       - checkout
       - run:
           name: install doxygen
-          command: sudo apt-get install doxygen
+          command: sudo apt update && sudo apt install doxygen
       - run:
           name: install dependencies
           command: |
@@ -253,11 +257,11 @@ jobs:
     parameters:
       python-version:
         type: string
-      numpy-version:
+      dependencies:
         type: string
 
     docker:
-      - image: circleci/python:<< parameters.python-version >>
+      - image: cimg/python:<< parameters.python-version >>
 
     steps:
       - checkout
@@ -268,9 +272,8 @@ jobs:
           command: |
             python -m venv env
             . env/bin/activate
-            pip install -r requirements.txt
             pip install dimod --no-index -f dist/ --force-reinstall --no-deps
-            pip install 'numpy<< parameters.numpy-version >>' --upgrade --only-binary=numpy
+            pip install << parameters.dependencies >> --upgrade --only-binary=numpy
       - run: &unix-run-tests
           name: run tests
           command: |
@@ -281,7 +284,7 @@ jobs:
 
   test-linux-cpp11:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - checkout
@@ -296,7 +299,7 @@ jobs:
         type: string
 
     macos:
-      xcode: 13.2.0
+      xcode: 13.4.0
 
     environment:
       <<: *global-environment
@@ -312,7 +315,7 @@ jobs:
             brew install pyenv
       - restore_cache:
           keys:
-            - pyenv-{{ .Environment.CIRCLE_JOB }}-xcode13.2.0
+            - pyenv-{{ .Environment.CIRCLE_JOB }}-xcode13.4.0
       - run:
           name: install python
           command: |
@@ -320,7 +323,7 @@ jobs:
       - save_cache:
           paths:
             - ~/.pyenv
-          key: pyenv-{{ .Environment.CIRCLE_JOB }}-xcode13.2.0
+          key: pyenv-{{ .Environment.CIRCLE_JOB }}-xcode13.4.0
       - run:
           name: install
           command: |
@@ -337,7 +340,7 @@ jobs:
 
   test-sdist:
     docker:
-      - image: circleci/python:3.9
+      - image: cimg/python:3.9
 
     steps:
       - checkout
@@ -409,20 +412,18 @@ workflows:
       - test-codecov
       - test-doctest
       - test-linux:
-          name: test-linux-numpy<< matrix.numpy-version >>-py<< matrix.python-version >>
+          name: test-linux-<< matrix.dependencies >>-py<< matrix.python-version >>
           requires:
             - build-linux
           matrix:
             parameters:
-              # test the lowest numpy version and the highest minor of each
-              # currently deployed
-              numpy-version: [==1.20.0, ~=1.21.0, ~=1.22.0]
+              # test the lowest supported numpy and the latest
+              dependencies: [oldest-supported-numpy, numpy]
               python-version: *python-versions
             exclude:
-              - numpy-version: ==1.20.0  # NumPy 1.20 does not support 3.10
-                python-version: 3.10.0
-              - numpy-version: ~=1.22.0  # NumPy 1.22 does not support 3.7
-                python-version: 3.7.9
+              # we don't support 1.14.5, the oldest version for Python 3.7.9
+              - python-version: 3.7.9
+                dependencies: oldest-supported-numpy
       - test-linux-cpp11
       - test-osx:
           name: test-osx-py<< matrix.python-version >>

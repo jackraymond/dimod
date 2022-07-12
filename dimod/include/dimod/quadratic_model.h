@@ -179,6 +179,16 @@ class Neighborhood {
         }
     }
 
+    value_type& back() {
+        assert(this->size() > 0);
+        return this->neighborhood_.back();
+    }
+
+    const value_type& back() const {
+        assert(this->size() > 0);
+        return this->neighborhood_.back();
+    }
+
     /// Returns an iterator to the beginning.
     iterator begin() { return this->neighborhood_.begin(); }
 
@@ -361,6 +371,32 @@ class QuadraticModelBase {
         }
     }
 
+    /**
+     * Add quadratic bias for the given variables at the end of eachother's neighborhoods.
+     *
+     * # Parameters
+     * - `u` - a variable.
+     * - `v` - a variable.
+     * - `bias` - the quadratic bias associated with `u` and `v`.
+     *
+     * # Exceptions
+     * When `u` is less than the largest neighbor in `v`'s neighborhood,
+     * `v` is less than the largest neighbor in `u`'s neighborhood, or either
+     * `u` or `v` is greater than ``num_variables()`` then the behavior of
+     * this method is undefined.
+     */
+    void add_quadratic_back(index_type u, index_type v, bias_type bias) {
+        assert(this->adj_[v].back().first <= u && static_cast<size_t>(u) < this->num_variables());
+        assert(this->adj_[u].back().first <= v && static_cast<size_t>(v) < this->num_variables());
+
+        // todo: handle vartype, see https://github.com/dwavesystems/dimod/pull/1193
+
+        this->adj_[u].emplace_back(v, bias);
+        if (u != v) {
+            this->adj_[v].emplace_back(u, bias);
+        }
+    }
+
     /// Return True if the model has no quadratic biases.
     bool is_linear() const {
         for (auto it = adj_.begin(); it != adj_.end(); ++it) {
@@ -387,7 +423,7 @@ class QuadraticModelBase {
      * `num_variables()` long.
      */
     template <class Iter>  // todo: allow different return types
-    bias_type energy(Iter sample_start) {
+    bias_type energy(Iter sample_start) const {
         bias_type en = offset();
 
         for (index_type u = 0; u < static_cast<index_type>(num_variables()); ++u) {
@@ -415,7 +451,7 @@ class QuadraticModelBase {
      * `num_variables()` long.
      */
     template <class T>
-    bias_type energy(const std::vector<T>& sample) {
+    bias_type energy(const std::vector<T>& sample) const {
         // todo: check length?
         return energy(sample.cbegin());
     }
@@ -817,6 +853,25 @@ class BinaryQuadraticModel : public QuadraticModelBase<Bias, Index> {
         }
     }
 
+    void add_quadratic_back(index_type u, index_type v, bias_type bias) {
+        // all of this can be sucked into QuadraticModelBase::add_quadratic_back
+        // once https://github.com/dwavesystems/dimod/pull/1193 is merged
+        if (u == v) {
+            switch (this->vartype(u)) {
+                case Vartype::BINARY: {
+                    this->linear(u) += bias;
+                    return;
+                }
+                case Vartype::SPIN: {
+                    this->offset() += bias;
+                    return;
+                }
+            }
+        }
+
+        base_type::add_quadratic_back(u, v, bias);
+    }
+
     /*
      * Add quadratic biases to the BQM from a dense matrix.
      *
@@ -1094,6 +1149,25 @@ class QuadraticModel : public QuadraticModelBase<Bias, Index> {
         } else {
             base_type::add_quadratic(u, v, bias);
         }
+    }
+
+    void add_quadratic_back(index_type u, index_type v, bias_type bias) {
+        // all of this can be sucked into QuadraticModelBase::add_quadratic_back
+        // once https://github.com/dwavesystems/dimod/pull/1193 is merged
+        if (u == v) {
+            switch (this->vartype(u)) {
+                case Vartype::BINARY: {
+                    this->linear(u) += bias;
+                    return;
+                }
+                case Vartype::SPIN: {
+                    this->offset() += bias;
+                    return;
+                }
+            }
+        }
+
+        base_type::add_quadratic_back(u, v, bias);
     }
 
     index_type add_variable(Vartype vartype) {
