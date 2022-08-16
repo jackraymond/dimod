@@ -213,21 +213,14 @@ class ConstrainedQuadraticModel:
             raise TypeError("model should be a QuadraticModel or a BinaryQuadraticModel")
 
     def add_constraint(self, data, *args, **kwargs) -> Hashable:
-        """A convenience wrapper for other methods that add constraints.
+        """Add a constraint to the model.
 
-        Examples:
-            >>> from dimod import ConstrainedQuadraticModel, Integers
-            >>> i, j = Integers(['i', 'j'])
-            >>> cqm = ConstrainedQuadraticModel()
-            >>> cqm.add_constraint(i + j <= 3, label='Constrained i-j range')
-            'Constrained i-j range'
-
-        See also:
-            :meth:`~.ConstrainedQuadraticModel.add_constraint_from_model`
-
-            :meth:`~.ConstrainedQuadraticModel.add_constraint_from_comparison`
-
-            :meth:`~.ConstrainedQuadraticModel.add_constraint_from_iterable`
+        This method dispatches to one of several specific methods based on
+        the type of the first argument.
+        For a detailed description of the accepted argument types, see
+        :meth:`~.ConstrainedQuadraticModel.add_constraint_from_model`,
+        :meth:`~.ConstrainedQuadraticModel.add_constraint_from_comparison`,
+        and :meth:`~.ConstrainedQuadraticModel.add_constraint_from_iterable`.
 
         """
         # in python 3.8+ we can use singledispatchmethod
@@ -253,7 +246,7 @@ class ConstrainedQuadraticModel:
 
             sense: One of `<=`, `>=`, `==`.
 
-            rhs: Right hand side of the constraint.
+            rhs: Right-hand side of the constraint.
 
             label: Label for the constraint. Must be unique. If no label
                 is provided, then one is generated using :mod:`uuid`.
@@ -320,10 +313,15 @@ class ConstrainedQuadraticModel:
                                        comp: Comparison,
                                        label: Optional[Hashable] = None,
                                        copy: bool = True) -> Hashable:
-        """Add a constraint from a comparison.
+        r"""Add a constraint from a symbolic comparison.
+
+        For a more detailed discussion of symbolic model manipulation, see
+        :ref:`intro_symbolic_math`.
 
         Args:
-            comp: Comparison object.
+            comp: Comparison object, generally constructed using symbolic math.
+                The right-hand side of any symbolic equation must be an integer
+                or float.
 
             label: Label for the constraint. Must be unique. If no label
                 is provided, one is generated using :mod:`uuid`.
@@ -335,23 +333,62 @@ class ConstrainedQuadraticModel:
         Returns:
             Label of the added constraint.
 
-        Examples:
-            >>> from dimod import ConstrainedQuadraticModel, Integer
-            >>> i = Integer('i')
-            >>> cqm = ConstrainedQuadraticModel()
-            >>> cqm.add_constraint_from_comparison(i <= 3, label='Max i')
-            'Max i'
-            >>> print(cqm.constraints["Max i"].to_polystring())
-            i <= 3
+        Example:
 
-            Adding a constraint without copying the comparison's model requires
-            caution:
+            Encode a constraint.
 
-            >>> cqm.add_constraint_from_comparison(i >= 1, label="Risky constraint", copy=False)
-            'Risky constraint'
-            >>> i *= 2
-            >>> print(cqm.constraints["Risky constraint"].to_polystring())
-            2*i >= 1
+            .. math::
+
+                x + y + xy <= 1
+
+            First create the relevant variables and the model.
+
+            >>> x, y = dimod.Binaries(['x', 'y'])
+            >>> cqm = dimod.ConstrainedQuadraticModel()
+
+            And add the constraint to the model.
+
+            >>> cqm.add_constraint(x + y + x*y <= 1, label='c0')
+            'c0'
+            >>> cqm.constraints['c0'].to_polystring()
+            'x + y + x*y <= 1'
+
+        Example:
+
+            Encode a constraint with a symbolic right-hand side.
+
+
+            .. math::
+
+                x + y \le x y
+
+
+            First create the relevant variables and the model.
+
+            >>> x, y = dimod.Binaries(['x', 'y'])
+            >>> cqm = dimod.ConstrainedQuadraticModel()
+
+            Trying to directly compare the left-hand and right-hand side
+            of the equation will raise an error, because the right-hand side
+            is not an integer or float.
+
+            >>> try:
+            ...     cqm.add_constraint(x + y <= x * y)
+            ... except TypeError:
+            ...     print("Not allowed!")
+            Not allowed!
+
+            To avoid this, simply subtract the right-hand side from both sides.
+
+            .. math::
+
+                x + y - xy \le 0
+
+            The constraint can then be added.
+
+            >>> cqm.add_constraint(x + y - x*y <= 0, label="c0")
+            'c0'
+
         """
         if not isinstance(comp.rhs, Number):
             raise TypeError("comparison should have a numeric rhs")
@@ -376,7 +413,7 @@ class ConstrainedQuadraticModel:
 
             sense: One of `<=`, `>=`, `==`.
 
-            rhs: The right hand side of the constraint.
+            rhs: The right-hand side of the constraint.
 
             label: Label for the constraint. Must be unique. If no label
                 is provided, then one is generated using :mod:`uuid`.
@@ -493,7 +530,7 @@ class ConstrainedQuadraticModel:
         Args:
             comp: Comparison object. The comparison must be a linear
                 equality constraint with all of the linear biases on the
-                left-hand side equal to one and the right hand side equal
+                left-hand side equal to one and the right-hand side equal
                 to one.
 
             label: Label for the constraint. Must be unique. If no label
@@ -518,7 +555,7 @@ class ConstrainedQuadraticModel:
             raise ValueError("discrete constraints must be equality constraints")
         if comp.rhs != 1:
             # could scale, but let's keep it simple for now
-            raise ValueError("the right hand side of a discrete constraint must be 1")
+            raise ValueError("the right-hand side of a discrete constraint must be 1")
         return self.add_discrete_from_model(comp.lhs, label=label, copy=copy)
 
     def add_discrete_from_iterable(self,
@@ -607,7 +644,7 @@ class ConstrainedQuadraticModel:
         Args:
             qm: A quadratic model or binary quadratic model.
                 The model must be linear with all of the linear biases on the
-                left-hand side equal to one and the right hand side equal
+                left-hand side equal to one and the right-hand side equal
                 to one.
 
             label: A label for the constraint. Must be unique. If no label
@@ -1144,8 +1181,8 @@ class ConstrainedQuadraticModel:
             A :class:`collections.namedtuple` with the following fields.
 
             * ``label``: Constraint label.
-            * ``lhs_energy``:  Energy of the left hand side of the constraint.
-            * ``rhs_energy``: Energy of the right hand side of the constraint.
+            * ``lhs_energy``:  Energy of the left-hand side of the constraint.
+            * ``rhs_energy``: Energy of the right-hand side of the constraint.
             * ``sense``: :class:`dimod.sym.Sense` of the constraint.
             * ``activity``: Equals ``lhs_energy - rhs_energy``.
             * ``violation``: Ammount by which the constraint is violated, if
@@ -1320,6 +1357,11 @@ class ConstrainedQuadraticModel:
                 and self.constraints.keys() == other.constraints.keys()
                 and all(constraint_eq(constraint, other.constraints[label])
                         for label, constraint in self.constraints.items()))
+
+    def is_linear(self) -> bool:
+        """Return True if the model has no quadratic interactions."""
+        return (self.objective.is_linear() and
+                all(comp.lhs.is_linear() for comp in self.constraints.values()))
 
     def lower_bound(self, v: Variable) -> Bias:
         """Return the lower bound on the specified variable.
@@ -1615,6 +1657,32 @@ class ConstrainedQuadraticModel:
             if v in qm.variables:
                 qm.set_upper_bound(v, ub)
 
+    def spin_to_binary(self, inplace: bool = False) -> ConstrainedQuadraticModel:
+        """Convert any spin-valued variables to binary-valued.
+
+        Args:
+            inplace: If set to False, returns a new constrained quadratic model.
+                Otherwise, the constrained quadratic model is modified in-place.
+
+        """
+        if not inplace:
+            return copy.deepcopy(self).spin_to_binary(inplace=True)
+
+        self.objective.spin_to_binary(inplace=True)
+
+        for comparison in self.constraints.values():
+            lhs = comparison.lhs
+            if isinstance(lhs, QuadraticModel):
+                lhs.spin_to_binary(inplace=True)
+            elif isinstance(lhs, BinaryQuadraticModel):
+                if lhs.vartype is Vartype.SPIN:
+                    lhs.change_vartype(Vartype.BINARY, inplace=True)
+            else:
+                # shouldn't ever happen
+                raise RuntimeError("unexpected constraint type")
+
+        return self
+
     def _iterable_to_qm(self, iterable: Iterable) -> QuadraticModel:
         qm = QuadraticModel()
 
@@ -1707,15 +1775,19 @@ class ConstrainedQuadraticModel:
             the same label.
 
         Examples:
+            Note that the ellipses in the outputs below are stand-ins for the
+            generated variable labels, which differ between runs.
+
             >>> from dimod import Integer, ConstrainedQuadraticModel
             >>> i = Integer('i')
             >>> cqm = ConstrainedQuadraticModel()
             >>> cqm.add_constraint(i*i <=3, label='i squared')
             'i squared'
-            >>> cqm.substitute_self_loops()                      # doctest: +IGNORE_RESULT
-            >>> cqm.constraints   # doctest: +IGNORE_RESULT
-            {'i squared': QuadraticModel({'i': 0.0, 'cf651f3d-bdf8-4735-9139-eee0a32e217f': 0.0}, {('cf651f3d-bdf8-4735-9139-eee0a32e217f', 'i'): 1.0}, 0.0, {'i': 'INTEGER', 'cf651f3d-bdf8-4735-9139-eee0a32e217f': 'INTEGER'}, dtype='float64') <= 3,
-            'cf651f3d-bdf8-4735-9139-eee0a32e217f': QuadraticModel({'i': 1.0, 'cf651f3d-bdf8-4735-9139-eee0a32e217f': -1.0}, {}, 0.0, {'i': 'INTEGER', 'cf651f3d-bdf8-4735-9139-eee0a32e217f': 'INTEGER'}, dtype='float64') == 0}
+            >>> cqm.substitute_self_loops() #doctest: +ELLIPSIS
+            {...}
+            >>> cqm.constraints #doctest: +ELLIPSIS, +NORMALIZE_WHITESPACE
+            {'i squared': Le(QuadraticModel({'i': 0.0, '...': 0.0}, {('...', 'i'): 1.0}, 0.0, {'i': 'INTEGER', '...': 'INTEGER'}, dtype='float64'), 3),
+            '...': Eq(QuadraticModel({'i': 1.0, '...': -1.0}, {}, 0.0, {'i': 'INTEGER', '...': 'INTEGER'}, dtype='float64'), 0)}
         """
         mapping: Dict[Variable, Variable] = dict()
 
