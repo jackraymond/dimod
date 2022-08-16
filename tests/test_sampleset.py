@@ -160,6 +160,13 @@ class Test_as_samples(unittest.TestCase):
             self.assertIsInstance(labels, dimod.variables.Variables)
             self.assertEqual(set(labels), set('ab'))
 
+        with self.subTest('sampleset'):
+            sampleset = dimod.SampleSet.from_samples({'a': 1, 'b': 1}, vartype='BINARY', energy=0)
+
+            samples, labels = dimod.as_samples(sampleset, labels_type=dimod.variables.Variables)
+            self.assertIsInstance(labels, dimod.variables.Variables)
+            self.assertEqual(set(labels), set('ab'))
+
     def test_list_of_empty(self):
         arr, labels = dimod.as_samples([[], [], []])
         np.testing.assert_array_equal(arr, np.empty((3, 0)))
@@ -773,6 +780,11 @@ class TestPickle(unittest.TestCase):
 
         self.assertEqual(new, sampleset)
         self.assertEqual(new.info, {'a': 5})
+
+    def test_integer(self):
+        sampleset = dimod.SampleSet.from_samples([0, 1], vartype='INTEGER', energy=1)
+        new = pickle.loads(pickle.dumps(sampleset))
+        self.assertEqual(new, sampleset)
 
 
 class TestTruncate(unittest.TestCase):
