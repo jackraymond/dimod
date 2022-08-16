@@ -346,6 +346,27 @@ class TestChangeVartype(unittest.TestCase):
             qm.change_vartype('SPIN', a)
 
 
+class TestClear(unittest.TestCase):
+    def test_clear(self):
+        qm = QM()
+        i = qm.add_variable('INTEGER')
+        j = qm.add_variable('INTEGER')
+        x = qm.add_variable('BINARY')
+
+        qm.set_linear(i, 1.5)
+        qm.set_linear(x, -2)
+
+        qm.set_quadratic(i, j, 1)
+        qm.set_quadratic(j, j, 5)
+        qm.set_quadratic(x, i, 7)
+
+        qm.clear()
+        self.assertEqual(qm.num_variables, 0)
+        self.assertEqual(qm.num_interactions, 0)
+        self.assertEqual(qm.offset, 0)
+        self.assertEqual(len(qm.variables), 0)
+
+
 class TestConstruction(unittest.TestCase):
     def test_dtype(self):
         self.assertEqual(QM().dtype, np.float64)  # default
@@ -445,6 +466,29 @@ class TestEnergies(unittest.TestCase):
                 arr = np.array([5, 2], dtype=dtype)
                 with self.assertRaises(ValueError):
                     qm.energy((arr, 'ij'))
+
+    def test_samples_like(self):
+        qm = dimod.QM.from_bqm(dimod.BQM({'a': 1}, {'ab': 2}, 3, 'BINARY'))
+
+        samples = np.asarray([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.int8)
+        labels = 'ab'
+
+        energies = [3, 3, 4, 6]
+
+        with self.subTest('tuple'):
+            np.testing.assert_array_equal(qm.energies((samples, labels)), energies)
+
+        with self.subTest('dicts'):
+            np.testing.assert_array_equal(
+                qm.energies([dict(zip(labels, row)) for row in samples]),
+                energies)
+
+        with self.subTest('sample set'):
+            np.testing.assert_array_equal(
+                qm.energies(dimod.SampleSet.from_samples((samples, labels),
+                                                         energy=energies,
+                                                         vartype='BINARY')),
+                energies)
 
     def test_squared(self):
         i, j = dimod.Integers('ij')
