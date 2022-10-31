@@ -5,3 +5,6 @@ cython==0.29.32
 reno==3.3.0  # for changelog
 
 setuptools>=46.4.0  # to support setup.cfg getting __version__
+
+networkx
+
