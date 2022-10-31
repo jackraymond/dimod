@@ -1268,6 +1268,10 @@ class BinaryQuadraticModel(QuadraticViewsMixin):
                 else:
                     degree = int(2*num_interactions - ldata['nidx'][v])
 
+                if not degree:
+                    # not needed, but helps with performance
+                    continue
+
                 qdata = np.frombuffer(
                     file_like.read(degree*quadratic_dtype.itemsize),
                     dtype=quadratic_dtype)
@@ -1588,7 +1592,7 @@ class BinaryQuadraticModel(QuadraticViewsMixin):
             return not self.num_variables and bool(self.offset == other)
         # todo: performance
         try:
-            if isinstance(other, QuadraticModel):
+            if callable(other.vartype):
                 vartype_eq = all(other.vartype(v) is self.vartype for v in other.variables)
             else:
                 vartype_eq = self.vartype == other.vartype
@@ -1715,16 +1719,14 @@ class BinaryQuadraticModel(QuadraticViewsMixin):
         Also does not include the memory consumed by the variable labels.
 
         Args:
-            capacity: If ``capacity`` is true, also include the capacity_ of the
-                underlying vectors in the calculation.
+            capacity: If ``capacity`` is true, also include the ``std::vector::capacity``
+                of the underlying vectors in the calculation.
 
         Returns:
             The number of bytes.
 
         Raises:
             TypeError: If :attr:`.dtype` is :class:`object`.
-
-        .. _capacity: https://www.cplusplus.com/reference/vector/vector/capacity/
 
         """
         return self.data.nbytes(capacity)
@@ -2227,7 +2229,7 @@ class BinaryQuadraticModel(QuadraticViewsMixin):
         file.write(memoryview(self.data.offset).cast('B'))
 
         # write the linear biases and the neighborhood lengths
-        file.write(memoryview(self.data._ilinear()).cast('B'))
+        file.write(memoryview(self.data._ilinear_and_degree()).cast('B'))
 
         # now the neighborhoods
         for vi in range(self.data.num_variables()):

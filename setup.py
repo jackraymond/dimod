@@ -67,6 +67,8 @@ setup(
     cmdclass=dict(build_ext=build_ext),
     ext_modules=cythonize(
         ['dimod/binary/cybqm/*.pyx',
+         'dimod/constrained/*.pyx',
+         'dimod/cyqmbase/*.pyx',
          'dimod/discrete/cydiscrete_quadratic_model.pyx',
          'dimod/quadratic/cyqm/*.pyx',
          'dimod/*.pyx',
@@ -76,7 +78,6 @@ setup(
         ),
     include_dirs=[
         numpy.get_include(),
-        'dimod/include/',
         ],
     install_requires=[
         # this is the oldest supported NumPy on Python 3.8, we cannot
