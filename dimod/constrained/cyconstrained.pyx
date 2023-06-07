@@ -20,6 +20,10 @@ import typing
 
 from copy import deepcopy
 
+cimport cython
+import numpy as np
+cimport numpy as np
+
 from cython.operator cimport preincrement as inc, dereference as deref
 from libc.math cimport ceil, floor
 from libcpp.unordered_set cimport unordered_set
@@ -34,6 +38,7 @@ from dimod.cyqmbase cimport cyQMBase
 from dimod.cyqmbase.cyqmbase_float64 import BIAS_DTYPE, INDEX_DTYPE
 from dimod.cyutilities cimport as_numpy_float
 from dimod.cyutilities cimport cppvartype
+from dimod.discrete.cydiscrete_quadratic_model cimport cyDiscreteQuadraticModel
 from dimod.libcpp.abc cimport QuadraticModelBase as cppQuadraticModelBase
 from dimod.libcpp.constrained_quadratic_model cimport Sense as cppSense, Penalty as cppPenalty, Constraint as cppConstraint
 from dimod.libcpp.vartypes cimport Vartype as cppVartype, vartype_info as cppvartype_info
@@ -155,23 +160,21 @@ cdef class cyConstrainedQuadraticModel:
             else:
                 raise ValueError("terms must be constant, linear or quadratic")
 
-
         constraint.set_sense(cppsense(sense))
         constraint.set_rhs(rhs)
 
-        if weight is not None:
-            raise NotImplementedError  # todo
-
         self.cppcqm.add_constraint(move(constraint))
         label = self.constraint_labels._append(label)
-
         assert(self.cppcqm.num_constraints() == self.constraint_labels.size())
+
+        if weight is not None:
+            ConstraintView(self, label).set_weight(weight, penalty=penalty)
 
         return label
 
     def add_constraint_from_model(self, cyQMBase model, sense, bias_type rhs, label, bint copy, weight, penalty):
         # get a mapping from the model's variables to ours
-        cdef vector[Py_ssize_t] mapping
+        cdef vector[index_type] mapping
         mapping.reserve(model.num_variables())
         cdef Py_ssize_t vi
         for vi in range(model.num_variables()):
@@ -207,90 +210,111 @@ cdef class cyConstrainedQuadraticModel:
                               upper_bound=model.base.upper_bound(vi),
                               )
 
-        cdef Py_ssize_t ci = self.cppcqm.add_constraint(deref(model.base),
-                                   cppsense(sense),
-                                   rhs,
-                                   mapping)
+        if copy:
+            self.cppcqm.add_constraint(deref(model.base), cppsense(sense), rhs, mapping)
+        else:
+            self.cppcqm.add_constraint(move(deref(model.base)), cppsense(sense), rhs, mapping)
+            model.clear()
+
+        label = self.constraint_labels._append(label)
+        assert(self.cppcqm.num_constraints() == self.constraint_labels.size())
 
         if weight is not None:
-            if penalty == 'linear':
-                self.cppcqm.constraint_ref(ci).set_penalty(cppPenalty.LINEAR)
-            elif penalty == 'quadratic':
-                for vi in range(model.num_variables()):
-                    if model.base.vartype(vi) != cppVartype.BINARY and model.base.vartype(vi) != cppVartype.SPIN:
-                        raise ValueError("quadratic penalty only allowed if the constraint has binary variables")
-                self.cppcqm.constraint_ref(ci).set_penalty(cppPenalty.QUADRATIC)
-            elif penalty == 'constant':
-                raise NotImplementedError('penalty should be "linear" or "quadratic"')
-                # self.cppcqm.constraint_ref(ci).set_penalty(cppPenalty.CONSTANT)
-            else:
-                raise NotImplementedError('penalty should be "linear" or "quadratic"')
+            ConstraintView(self, label).set_weight(weight, penalty=penalty)
 
-            self.cppcqm.constraint_ref(ci).set_weight(weight)
-            
+        return label
 
-        return self.constraint_labels._append(label)
+    def add_variables(self, vartype, variables, *, lower_bound=None, upper_bound=None):
+        """Add variables to the model.
 
-    def add_variable(self, vartype, v=None, *, lower_bound=None, upper_bound=None):
+        Args:
+            vartype:
+                Variable type. One of:
+
+                * :class:`~dimod.Vartype.SPIN`, ``'SPIN'``, ``{-1, 1}``
+                * :class:`~dimod.Vartype.BINARY`, ``'BINARY'``, ``{0, 1}``
+                * :class:`~dimod.Vartype.INTEGER`, ``'INTEGER'``
+                * :class:`~dimod.Vartype.REAL`, ``'REAL'``
+
+            variables:
+                An iterable of variable labels or an integer. An integer ``n``
+                is interpreted as ``range(n)``.
+
+            lower_bound:
+                Lower bound on the variable. Ignored when the variable is
+                :class:`~dimod.Vartype.BINARY` or :class:`~dimod.Vartype.SPIN`.
+
+            upper_bound:
+                Upper bound on the variable. Ignored when the variable is
+                :class:`~dimod.Vartype.BINARY` or :class:`~dimod.Vartype.SPIN`.
+
+        Exceptions:
+            ValueError: If a variable is added with a different ``vartype``,
+                ``lower_bound``, or ``upper_bound``.
+                Note that the variables before the inconsistent variable will
+                be added to the model.
+
+        """
         cdef cppVartype vt = cppvartype(as_vartype(vartype, extended=True))
 
-        cdef Py_ssize_t vi
-        cdef bias_type lb
-        cdef bias_type ub
-
-        if v is not None and self.variables.count(v):
-            # variable is already present
-            vi = self.variables.index(v)
-            if self.cppcqm.vartype(vi) != vt:
-                raise TypeError(f"variable {v!r} already exists with a different vartype")
-            if vt != cppVartype.BINARY and vt != cppVartype.SPIN:
-                if lower_bound is not None:
-                    lb = lower_bound
-                    if lb != self.cppcqm.lower_bound(vi):
-                        raise ValueError(
-                            f"the specified lower bound, {lower_bound}, for "
-                            f"variable {v!r} is different than the existing lower "
-                            f"bound, {self.cppcqm.lower_bound(vi)}")
-                if upper_bound is not None:
-                    ub = upper_bound
-                    if ub != self.cppcqm.upper_bound(vi):
-                        raise ValueError(
-                            f"the specified upper bound, {upper_bound}, for "
-                            f"variable {v!r} is different than the existing upper "
-                            f"bound, {self.cppcqm.upper_bound(vi)}")
-
-            return v
-
-        # ok, we have a shiny new variable
-
-        if vt == cppVartype.SPIN or vt == cppVartype.BINARY:
-            # we can ignore bounds
-            v = self.variables._append(v)
-            self.cppcqm.add_variable(vt)
-            return v
-
-        if vt != cppVartype.INTEGER and vt != cppVartype.REAL:
+        # for BINARY and SPIN the bounds are ignored
+        if vt == cppVartype.SPIN:
+            lower_bound = -1
+            upper_bound = +1
+        elif vt == cppVartype.BINARY:
+            lower_bound = 0
+            upper_bound = 1
+        elif vt != cppVartype.INTEGER and vt != cppVartype.REAL:
             raise RuntimeError("unexpected vartype")  # catch some future issues
 
-
+        # bound parsing, we'll also want to track whether the bound was specified or not
+        cdef bint lb_given = lower_bound is not None
+        cdef bias_type lb = lower_bound if lb_given else cppvartype_info[bias_type].default_min(vt)
+        if lb < cppvartype_info[bias_type].min(vt):
+            raise ValueError(f"lower_bound cannot be less than {cppvartype_info[bias_type].min(vt)}")
         
-        if lower_bound is None:
-            lb = cppvartype_info[bias_type].default_min(vt)
-        else:
-            lb = lower_bound
-            if lb < cppvartype_info[bias_type].min(vt):
-                raise ValueError(f"lower_bound cannot be less than {cppvartype_info[bias_type].min(vt)}")
+        cdef bint ub_given = upper_bound is not None
+        cdef bias_type ub = upper_bound if ub_given else cppvartype_info[bias_type].default_max(vt)
+        if ub > cppvartype_info[bias_type].max(vt):
+            raise ValueError(f"upper_bound cannot be greater than {cppvartype_info[bias_type].max(vt)}")
 
-        if upper_bound is None:
-            ub = cppvartype_info[bias_type].default_max(vt)
-        else:
-            ub = upper_bound
-            if ub > cppvartype_info[bias_type].max(vt):
-                raise ValueError(f"upper_bound cannot be greater than {cppvartype_info[bias_type].max(vt)}")
+        if lb > ub:
+            raise ValueError("lower_bound must be less than or equal to upper_bound")        
 
-        v = self.variables._append(v)
-        self.cppcqm.add_variable(vt, lb, ub)
-        return v
+        # parse the variables
+        if isinstance(variables, int):
+            variables = range(variables)
+
+        cdef Py_ssize_t count = self.variables.size()
+        for v in variables:
+            self.variables._append(v, permissive=True)
+
+            if count == self.variables.size():
+                # the variable already existed
+                vi = self.variables.index(v)
+
+                if vt != self.cppcqm.vartype(vi):
+                    raise ValueError(f"variable {v!r} already exists with a different vartype")
+
+                if lb_given and lb != self.cppcqm.lower_bound(vi):
+                    raise ValueError(
+                        f"the specified lower bound, {lower_bound}, for "
+                        f"variable {v!r} is different than the existing lower "
+                        f"bound, {self.cppcqm.lower_bound(vi)}")
+
+                if ub_given and ub != self.cppcqm.upper_bound(vi):
+                    raise ValueError(
+                        f"the specified upper bound, {upper_bound}, for "
+                        f"variable {v!r} is different than the existing upper "
+                        f"bound, {self.cppcqm.upper_bound(vi)}")
+
+            elif count == self.variables.size() - 1:
+                # we added a new variable
+                self.cppcqm.add_variable(vt, lb, ub)
+                count += 1
+
+            else:
+                raise RuntimeError("something went wrong")
 
     def change_vartype(self, vartype, v):
         vartype = as_vartype(vartype, extended=True)
@@ -309,8 +333,52 @@ cdef class cyConstrainedQuadraticModel:
         self.cppcqm.clear()
 
     def fix_variable(self, v, bias_type assignment):
-        self.cppcqm.fix_variable(self.variables.index(v), assignment)
+        cdef Py_ssize_t vi = self.variables.index(v)
+
+        if self.cppcqm.vartype(vi) == cppVartype.BINARY and assignment:
+            # we may be affecting discrete constraints, so let's update the markers
+            for i in range(self.cppcqm.num_constraints()):
+                constraint = self.cppcqm.constraint_ref(i)
+
+                if constraint.marked_discrete() and constraint.has_variable(vi):
+                    constraint.mark_discrete(False)
+
+        self.cppcqm.fix_variable(vi, assignment)
         self.variables._remove(v)
+
+    def fix_variables(self, fixed, *, bint inplace = True):
+        if isinstance(fixed, typing.Mapping):
+            fixed = fixed.items()
+
+        if inplace:
+            for v, assignment in fixed:
+                self.fix_variable(v, assignment)
+            return self
+
+        cdef vector[index_type] variables
+        cdef vector[bias_type] assignments
+        labels = set()
+
+        for v, bias in fixed:
+            variables.push_back(self.variables.index(v))
+            assignments.push_back(bias)
+            labels.add(v)
+
+        cqm = make_cqm(self.cppcqm.fix_variables(variables.begin(), variables.end(), assignments.begin()))
+
+        # relabel variables
+        mapping = dict()
+        i = 0
+        for v in self.variables:
+            if v not in labels:
+                mapping[i] = v
+                i += 1
+        cqm.relabel_variables(mapping)
+
+        # relabel constraints
+        cqm.relabel_constraints(dict(enumerate(self.constraint_labels)))
+
+        return cqm
 
     def flip_variable(self, v):
         cdef Py_ssize_t vi = self.variables.index(v)
@@ -320,6 +388,48 @@ cdef class cyConstrainedQuadraticModel:
             self.cppcqm.substitute_variable(vi, -1, 1)
         else:
             raise ValueError(f"can only flip SPIN and BINARY variables")
+
+    @classmethod
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def from_discrete_quadratic_model(cls, dqm, relabel_func=lambda v, c: (v, c)):
+        """Construct a constrained quadratic model from a discrete quadratic model.
+
+        Args:
+            dqm: Discrete quadratic model.
+
+            relabel_func (optional): A function that takes two arguments, the
+                variable label and the case label, and returns a new variable
+                label to be used in the CQM. By default generates a 2-tuple
+                `(variable, case)`.
+
+        Returns:
+            A constrained quadratic model.
+
+        """
+        cdef cyConstrainedQuadraticModel cqm = cls()
+
+        cdef cyDiscreteQuadraticModel cydqm = dqm._cydqm
+
+        cqm.cppcqm.set_objective(cydqm.cppbqm)
+        cqm.variables._extend(relabel_func(v, case) for v in dqm.variables for case in dqm.get_cases(v))
+
+        cqm.cppcqm.add_constraints(cydqm.num_variables())
+        cqm.constraint_labels._extend(dqm.variables)
+
+        cdef Py_ssize_t vi, ci
+        for vi in range(cydqm.num_variables()):
+            constraint = cqm.cppcqm.constraint_ref(vi)
+            for ci in range(cydqm.case_starts_[vi], cydqm.case_starts_[vi+1]):
+                constraint.add_linear(ci, 1)
+            constraint.set_sense(cppSense.EQ)
+            constraint.set_rhs(1)
+            constraint.mark_discrete()
+
+        assert(cqm.cppcqm.num_variables() == cqm.variables.size())
+        assert(cqm.cppcqm.num_constraints() == cqm.constraint_labels.size())
+
+        return cqm
 
     def lower_bound(self, v):
         """Return the lower bound on the specified variable.

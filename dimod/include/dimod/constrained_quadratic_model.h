@@ -21,22 +21,77 @@
 
 #include "dimod/abc.h"
 #include "dimod/constraint.h"
+#include "dimod/iterators.h"
 #include "dimod/expression.h"
 #include "dimod/vartypes.h"
 
 namespace dimod {
 
+/// A constrained quadratic model (CQM) can include an objective and constraints as polynomials with one or two variables per term.
 template <class Bias, class Index = int>
+class ConstrainedQuadraticModel;
+
+template <class CQM>
+class ConstraintsView {
+ public:
+    using bias_type = typename CQM::bias_type;
+    using index_type = typename CQM::index_type;
+
+    using constraint_type = typename std::conditional<std::is_const<CQM>::value,
+                                                      const Constraint<bias_type, index_type>,
+                                                      Constraint<bias_type, index_type>>::type;
+
+    using iterator = iterators::ConstraintIterator<
+            typename std::vector<std::shared_ptr<Constraint<bias_type, index_type>>>::iterator>;
+    using const_iterator = iterators::ConstraintIterator<
+            typename std::vector<
+                    std::shared_ptr<Constraint<bias_type, index_type>>>::const_iterator,
+            const Constraint<bias_type, index_type>>;
+
+    explicit ConstraintsView(CQM* parent) : parent_(parent) {}
+
+    constraint_type& operator[](index_type c) { return *(parent_->constraints_[c]); }
+    const constraint_type& operator[](index_type c) const { return *(parent_->constraints_[c]); }
+
+    constraint_type& at(index_type c) { return *(parent_->constraints_.at(c)); }
+    const constraint_type& at(index_type c) const { return *(parent_->constraints_.at(c)); }
+
+    iterator begin() { return iterators::make_constraint_iterator(parent_->constraints_.begin()); }
+    const_iterator begin() const {
+        return iterators::make_const_constraint_iterator(parent_->constraints_.cbegin());
+    }
+    iterator end() { return iterators::make_constraint_iterator(parent_->constraints_.end()); }
+    const_iterator end() const {
+        return iterators::make_const_constraint_iterator(parent_->constraints_.cend());
+    }
+
+    const_iterator cbegin() const {
+        return iterators::make_const_constraint_iterator(parent_->constraints_.cbegin());
+    }
+    const_iterator cend() const {
+        return iterators::make_const_constraint_iterator(parent_->constraints_.cend());
+    }
+
+    std::size_t size() const { return parent_->constraints_.size(); }
+
+ private:
+    CQM* const parent_;
+};
+
+template <class Bias, class Index>
 class ConstrainedQuadraticModel {
  public:
-    /// The first template parameter (Bias).
+    /// First template parameter (`Bias`).
     using bias_type = Bias;
 
-    /// The second template parameter (Index).
+    /// Second template parameter (`Index`).
     using index_type = Index;
 
-    /// Unsigned integral type that can represent non-negative values.
+    /// Unsigned integer type that can represent non-negative values.
     using size_type = std::size_t;
+
+    friend class ConstraintsView<ConstrainedQuadraticModel<bias_type, index_type>>;
+    friend class ConstraintsView<const ConstrainedQuadraticModel<bias_type, index_type>>;
 
     ConstrainedQuadraticModel();
 
@@ -60,23 +115,39 @@ class ConstrainedQuadraticModel {
     /// If an exception is thrown, there are no changes to the model.
     index_type add_constraint(Constraint<bias_type, index_type> constraint);
 
+    /// Add `n` constraints.
     index_type add_constraints(index_type n);
 
+    /// Add a constraint with only linear coefficients.
     index_type add_linear_constraint(std::initializer_list<index_type> variables,
                                      std::initializer_list<bias_type> biases, Sense sense,
                                      bias_type rhs);
 
+    /// Add variable of type `vartype` with lower bound `lb` and upper bound `ub`.
     index_type add_variable(Vartype vartype, bias_type lb, bias_type ub);
 
+    /// Add variable of type `vartype`.
     index_type add_variable(Vartype vartype);
 
+    /// Add `n` variables of type `vartype`.
     index_type add_variables(Vartype vartype, index_type n);
 
+    /// Add `n` variables of type `vartype` with lower bound `lb` and upper bound `ub`.
     index_type add_variables(Vartype vartype, index_type n, bias_type lb, bias_type ub);
 
+    /// Change the variable type of variable `v` to `vartype`, updating the biases appropriately.
     void change_vartype(Vartype vartype, index_type v);
 
     void clear();
+
+    /// Return a view over the constraints. The view can be iterated over.
+    /// @code
+    /// for (auto& constraint : cqm.constraints()) {}
+    /// @endcode
+    ConstraintsView<ConstrainedQuadraticModel<bias_type, index_type>> constraints();
+
+    /// @copydoc ConstrainedQuadraticModel::constraints()
+    const ConstraintsView<const ConstrainedQuadraticModel<bias_type, index_type>> constraints() const;
 
     Constraint<bias_type, index_type>& constraint_ref(index_type c);
     const Constraint<bias_type, index_type>& constraint_ref(index_type c) const;
@@ -84,8 +155,19 @@ class ConstrainedQuadraticModel {
     std::weak_ptr<Constraint<bias_type, index_type>> constraint_weak_ptr(index_type c);
     std::weak_ptr<const Constraint<bias_type, index_type>> constraint_weak_ptr(index_type c) const;
 
+    /// Fix variable `v` in the model to value `assignment`.
     template <class T>
     void fix_variable(index_type v, T assignment);
+
+    /// Create a new model by fixing many variables.
+    template <class VarIter, class AssignmentIter>
+    ConstrainedQuadraticModel fix_variables(VarIter first, VarIter last,
+                                            AssignmentIter assignment) const;
+
+    /// Create a new model by fixing many variables.
+    template <class T>
+    ConstrainedQuadraticModel fix_variables(std::initializer_list<index_type> variables,
+                                            std::initializer_list<T> assignments) const;
 
     /// Return the lower bound on variable ``v``.
     bias_type lower_bound(index_type v) const;
@@ -102,17 +184,22 @@ class ConstrainedQuadraticModel {
     /// Remove a constraint from the model.
     void remove_constraint(index_type c);
 
+    /// Remove variable `v` from the model.
     void remove_variable(index_type v);
 
+    /// Set a lower bound of `lb` on variable `v`.
     void set_lower_bound(index_type v, bias_type lb);
 
+    /// Set an objective for the model.
     template <class B, class I>
     void set_objective(const abc::QuadraticModelBase<B, I>& objective);
 
+    /// Set an objective for the model using a mapping.
     template <class B, class I, class T>
     void set_objective(const abc::QuadraticModelBase<B, I>& objective,
                        const std::vector<T>& mapping);
 
+    /// Set an upper bound of `ub` on variable `v`.
     void set_upper_bound(index_type v, bias_type ub);
     void set_vartype(index_type v, Vartype vartype);
 
@@ -124,11 +211,11 @@ class ConstrainedQuadraticModel {
     /// Return the variable type of variable ``v``.
     Vartype vartype(index_type v) const;
 
-    Expression<bias_type, index_type> objective;
-
     friend void swap(ConstrainedQuadraticModel& first, ConstrainedQuadraticModel& second) {
         first.myswap(second);
     }
+
+    Expression<bias_type, index_type> objective;
 
  private:
     // I can't figure out how to get Expression to grant friendship to friend swap...
@@ -153,6 +240,11 @@ class ConstrainedQuadraticModel {
 
         swap(this->varinfo_, other.varinfo_);
     }
+
+    static void fix_variables_expr(const Expression<bias_type, index_type>& src,
+                                   Expression<bias_type, index_type>& dst,
+                                   const std::vector<index_type>& old_to_new,
+                                   const std::vector<bias_type>& assignments);
 
     std::vector<std::shared_ptr<Constraint<bias_type, index_type>>> constraints_;
 
@@ -396,6 +488,18 @@ void ConstrainedQuadraticModel<bias_type, index_type>::clear() {
 }
 
 template <class bias_type, class index_type>
+ConstraintsView<ConstrainedQuadraticModel<bias_type, index_type>>
+ConstrainedQuadraticModel<bias_type, index_type>::constraints() {
+    return ConstraintsView<ConstrainedQuadraticModel<bias_type, index_type>>(this);
+}
+
+template <class bias_type, class index_type>
+const ConstraintsView<const ConstrainedQuadraticModel<bias_type, index_type>>
+ConstrainedQuadraticModel<bias_type, index_type>::constraints() const {
+    return ConstraintsView<const ConstrainedQuadraticModel<bias_type, index_type>>(this);
+}
+
+template <class bias_type, class index_type>
 Constraint<bias_type, index_type>& ConstrainedQuadraticModel<bias_type, index_type>::constraint_ref(
         index_type c) {
     assert(c >= 0 && static_cast<size_type>(c) < num_constraints());
@@ -429,6 +533,113 @@ void ConstrainedQuadraticModel<bias_type, index_type>::fix_variable(index_type v
     assert(v >= 0 && static_cast<size_type>(v) < num_variables());
     substitute_variable(v, 0, assignment);
     remove_variable(v);
+}
+
+template <class bias_type, class index_type>
+void ConstrainedQuadraticModel<bias_type, index_type>::fix_variables_expr(
+        const Expression<bias_type, index_type>& src, Expression<bias_type, index_type>& dst,
+        const std::vector<index_type>& old_to_new, const std::vector<bias_type>& assignments) {
+    // We'll want to access the expressions by index for speed
+    const abc::QuadraticModelBase<bias_type, index_type>& isrc = src;
+    abc::QuadraticModelBase<bias_type, index_type>& idst = dst;
+
+    // offset
+    dst.add_offset(src.offset());
+
+    // linear biases and variables
+    for (size_type i = 0; i < src.num_variables(); ++i) {
+        auto v = src.variables()[i];
+
+        if (old_to_new[v] < 0) {
+            // fixed
+            dst.add_offset(isrc.linear(i) * assignments[v]);
+        } else {
+            // not fixed
+            dst.add_linear(old_to_new[v], isrc.linear(i));
+        }
+    }
+
+    // quadratic, and it's safe to do everything by index!
+    for (auto it = isrc.cbegin_quadratic(); it != isrc.cend_quadratic(); ++it) {
+        auto u = src.variables()[it->u];
+        auto v = src.variables()[it->v];
+
+        if (old_to_new[u] < 0 && old_to_new[v] < 0) {
+            // both fixed, becomes offset
+            idst.add_offset(assignments[u] * assignments[v] * it->bias);
+        } else if (old_to_new[u] < 0) {
+            // u fixed, v unfixed
+            idst.add_linear(old_to_new[it->v], assignments[u] * it->bias);
+        } else if (old_to_new[v] < 0) {
+            // u unfixed, v fixed
+            idst.add_linear(old_to_new[it->u], assignments[v] * it->bias);
+        } else {
+            // neither fixed
+            idst.add_quadratic_back(old_to_new[it->u], old_to_new[it->v], it->bias);
+        }
+    }
+}
+
+template <class bias_type, class index_type>
+template <class VarIter, class AssignmentIter>
+ConstrainedQuadraticModel<bias_type, index_type>
+ConstrainedQuadraticModel<bias_type, index_type>::fix_variables(VarIter first, VarIter last,
+                                                                AssignmentIter assignment) const {
+    // We're going to make a new CQM
+    auto cqm = ConstrainedQuadraticModel<bias_type, index_type>();
+
+    // Map from the old indices to the new ones. We'll use -1 to indicate a fixed
+    // variable. We could use an unordered map or similar, but this ends up being
+    // faster
+    std::vector<index_type> old_to_new(this->num_variables());
+
+    // The fixed variable assignments, by old indices
+    // We don't actually need this to be full of 0s, but this is simple.
+    // We could inherit the type from AssignmentIter, but again this seems simpler.
+    std::vector<bias_type> assignments(this->num_variables());
+
+    // Fill in our various data vectors and add the variables to the new model
+    for (auto it = first; it != last; ++it, ++assignment) {
+        old_to_new[*it] = -1;
+        assignments[*it] = *assignment;
+    }
+    for (size_type i = 0; i < old_to_new.size(); ++i) {
+        if (old_to_new[i] < 0) continue;  // fixed
+
+        old_to_new[i] =
+                cqm.add_variable(this->vartype(i), this->lower_bound(i), this->upper_bound(i));
+    }
+
+    // Objective
+    fix_variables_expr(this->objective, cqm.objective, old_to_new, assignments);
+
+    // Constraints
+    for (auto& old_constraint_ptr : constraints_) {
+        auto new_constraint = cqm.new_constraint();
+
+        fix_variables_expr(*old_constraint_ptr, new_constraint, old_to_new, assignments);
+
+        // dev note: this is kind of a maintenance mess. If we find ourselves doing this again
+        // we should make a method for copying attributes etc
+        new_constraint.set_rhs(old_constraint_ptr->rhs());
+        new_constraint.set_sense(old_constraint_ptr->sense());
+        new_constraint.set_weight(old_constraint_ptr->weight());
+        new_constraint.set_penalty(old_constraint_ptr->penalty());
+        new_constraint.mark_discrete(old_constraint_ptr->marked_discrete() &&
+                                     new_constraint.is_onehot());
+
+        cqm.add_constraint(std::move(new_constraint));
+    }
+
+    return cqm;
+}
+
+template <class bias_type, class index_type>
+template <class T>
+ConstrainedQuadraticModel<bias_type, index_type>
+ConstrainedQuadraticModel<bias_type, index_type>::fix_variables(
+        std::initializer_list<index_type> variables, std::initializer_list<T> assignments) const {
+    return fix_variables(variables.begin(), variables.end(), assignments.begin());
 }
 
 template <class bias_type, class index_type>

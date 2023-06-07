@@ -40,7 +40,7 @@ class Expression : public abc::QuadraticModelBase<Bias, Index> {
     /// The second template parameter (Index).
     using index_type = Index;
 
-    /// Unsigned integral type that can represent non-negative values.
+    /// Unsigned integer type that can represent non-negative values.
     using size_type = std::size_t;
 
     using parent_type = ConstrainedQuadraticModel<bias_type, index_type>;
@@ -296,9 +296,9 @@ class Expression : public abc::QuadraticModelBase<Bias, Index> {
     /// So we want to use the vartype relative to the base_type's indices.
     Vartype vartype_(index_type v) const { return vartype(variables_[v]); }
 
- private:
     const parent_type* parent_;
 
+ private:
     /// List of the parent's label used by expression
     std::vector<index_type> variables_;
 
@@ -419,7 +419,20 @@ void Expression<bias_type, index_type>::clear() {
 template <class bias_type, class index_type>
 template <class T>
 void Expression<bias_type, index_type>::fix_variable(index_type v, T assignment) {
-    throw std::logic_error("not implemented - fix_variable");
+    assert(v >= 0 && static_cast<size_type>(v) < parent_->num_variables());
+
+    auto vit = indices_.find(v);
+    if (vit == indices_.end()) return;  // nothing to remove
+
+    // remove the biases
+    base_type::fix_variable(vit->second, assignment);
+
+    // update the indices
+    auto it = variables_.erase(variables_.begin() + vit->second);
+    indices_.erase(vit);
+    for (; it != variables_.end(); ++it) {
+        indices_[*it] -= 1;
+    }
 }
 
 template <class bias_type, class index_type>
@@ -536,32 +549,35 @@ Expression<bias_type, index_type>::num_interactions(index_type v) const {
 
 template <class bias_type, class index_type>
 void Expression<bias_type, index_type>::reindex_variables(index_type v) {
-    bool remake_indices = false;  // if something changes, we recreate the indices
+    size_type start = variables_.size();  // the start of the indices that need to change
 
+    // see if v is present
     auto it = indices_.find(v);
     if (it != indices_.end()) {
-        // in this case we actually need to remove a variable from the model
+        start = it->second;
         base_type::remove_variable(it->second);
         variables_.erase(variables_.begin() + it->second);
-
-        remake_indices = true;
+        indices_.erase(it);
     }
 
-    // we need to reindex all of the variable labels that are greater than v
-    // variables_ is not ordered, so we just need to go through the whole thing
+    // remove any v/index pairs from indices_ for which v changed
     for (auto& u : variables_) {
         if (u > v) {
+            indices_.erase(u);
             --u;
-            remake_indices = true;
         }
     }
 
-    if (remake_indices) {
-        // remake the indices
-        indices_.clear();
-        for (size_type ui = 0; ui < variables_.size(); ++ui) {
-            indices_[variables_[ui]] = ui;
+    // update the indices before start
+    for (size_type i = 0; i < start; ++i) {
+        if (variables_[i] >= v) {
+            indices_[variables_[i]] = i;
         }
+    }
+
+    // update the indices after start
+    for (size_type i = start; i < variables_.size(); ++i) {
+        indices_[variables_[i]] = i;
     }
 
     assert(indices_.size() == variables_.size());
@@ -592,7 +608,20 @@ bool Expression<bias_type, index_type>::remove_interaction(index_type u, index_t
 
 template <class bias_type, class index_type>
 void Expression<bias_type, index_type>::remove_variable(index_type v) {
-    throw std::logic_error("not implemented - remove_variable");
+    assert(v >= 0 && static_cast<size_type>(v) < parent_->num_variables());
+
+    auto vit = indices_.find(v);
+    if (vit == indices_.end()) return;  // nothing to remove
+
+    // remove the biases
+    base_type::remove_variable(vit->second);
+
+    // update the indices
+    auto it = variables_.erase(variables_.begin() + vit->second);
+    indices_.erase(vit);
+    for (; it != variables_.end(); ++it) {
+        indices_[*it] -= 1;
+    }
 }
 
 template <class bias_type, class index_type>

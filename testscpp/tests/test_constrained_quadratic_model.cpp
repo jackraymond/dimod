@@ -286,15 +286,62 @@ SCENARIO("ConstrainedQuadraticModel  tests") {
         auto cqm = ConstrainedQuadraticModel<double>();
         cqm.add_variables(Vartype::BINARY, 3);
 
-        auto c0 = cqm.add_constraint();
-        cqm.constraint_ref(c0).set_linear(2, 1);
-        cqm.constraint_ref(c0).set_sense(Sense::GE);
-        cqm.constraint_ref(c0).set_rhs(1);
+        auto c0 = cqm.add_linear_constraint({0, 1, 2}, {1, 1, 1}, Sense::GE, 1);
 
-        std::vector<int> sample{0, 0, 1};
-        CHECK(cqm.constraint_ref(c0).energy(sample.begin()) == 1);
+        WHEN("we mark the constraint as discrete") {
+            cqm.constraint_ref(c0).set_sense(Sense::EQ);
+            cqm.constraint_ref(c0).mark_discrete(true);
 
-        WHEN("we clear it") {
+            AND_WHEN("we clear the constraint") {
+                cqm.constraint_ref(c0).clear();
+
+                THEN("the constraint is a 0 == 0 constraint") {
+                    REQUIRE(cqm.num_constraints() == 1);
+                    REQUIRE(cqm.num_variables() == 3);  // no change
+
+                    CHECK(cqm.constraint_ref(c0).num_variables() == 0);
+                    CHECK(cqm.constraint_ref(c0).rhs() == 0);
+                    CHECK(cqm.constraint_ref(c0).sense() == Sense::EQ);
+
+                    CHECK(!cqm.constraint_ref(c0).marked_discrete());
+                }
+            }
+        }
+
+        WHEN("we make the constraint soft") {
+            cqm.constraint_ref(c0).set_weight(5);
+
+            AND_WHEN("we clear the constraint") {
+                cqm.constraint_ref(c0).clear();
+
+                THEN("the constraint is a 0 == 0 constraint") {
+                    REQUIRE(cqm.num_constraints() == 1);
+                    REQUIRE(cqm.num_variables() == 3);  // no change
+
+                    CHECK(cqm.constraint_ref(c0).num_variables() == 0);
+                    CHECK(cqm.constraint_ref(c0).rhs() == 0);
+                    CHECK(cqm.constraint_ref(c0).sense() == Sense::EQ);
+
+                    CHECK(!cqm.constraint_ref(c0).is_soft());
+                    CHECK(cqm.constraint_ref(c0).penalty() == Penalty::LINEAR);
+                }
+            }
+        }
+
+        WHEN("we clear the constraint") {
+            cqm.constraint_ref(c0).clear();
+
+            THEN("the constraint is a 0 == 0 constraint") {
+                REQUIRE(cqm.num_constraints() == 1);
+                REQUIRE(cqm.num_variables() == 3);  // no change
+
+                CHECK(cqm.constraint_ref(c0).num_variables() == 0);
+                CHECK(cqm.constraint_ref(c0).rhs() == 0);
+                CHECK(cqm.constraint_ref(c0).sense() == Sense::EQ);
+            }
+        }
+
+        WHEN("we clear the CQM") {
             cqm.clear();
 
             THEN("it is empty") {
@@ -410,16 +457,65 @@ SCENARIO("ConstrainedQuadraticModel  tests") {
             }
         }
 
-        // WHEN("we fix a variable") {
-        //     cqm.fix_variable(x, 0);
+        WHEN("we fix a variable that is not used in the expression") {
+            const0.fix_variable(y, 2);
 
-        //     THEN("everything is updated correctly") {
-        //         REQUIRE(cqm.num_variables() == 3);
+            THEN("nothing changes") {
+                REQUIRE(const0.num_variables() == 3);
+                CHECK(const0.linear(x) == 0);
+                CHECK(const0.linear(y) == 0);
+                CHECK(const0.linear(i) == 3);
+                CHECK(const0.linear(j) == 0);
 
-        //         REQUIRE(const0.num_variables() == 2);
-        //         REQUIRE(const0.linear(i-1) == 3);
-        //     }
-        // }
+                CHECK(const0.num_interactions() == 2);
+                CHECK(const0.quadratic(x, j) == 2);
+                CHECK(const0.quadratic(i, j) == 5);
+            }
+        }
+
+        WHEN("we fix a variable that is used in the expression") {
+            const0.fix_variable(x, 2);
+
+            THEN("the biases are updated") {
+                REQUIRE(const0.num_variables() == 2);
+                CHECK(const0.linear(x) == 0);
+                CHECK(const0.linear(y) == 0);
+                CHECK(const0.linear(i) == 3);
+                CHECK(const0.linear(j) == 4);
+
+                CHECK(const0.num_interactions() == 1);
+                CHECK(const0.quadratic(i, j) == 5);
+            }
+        }
+    }
+
+    GIVEN("A discrete constraint") {
+        auto cqm = ConstrainedQuadraticModel<double>();
+        cqm.add_variables(Vartype::BINARY, 5);
+        auto c0 = cqm.add_linear_constraint({0, 1, 2, 3, 4}, {1, 1, 1, 1, 1}, Sense::EQ, 1);
+        cqm.constraint_ref(c0).mark_discrete();
+
+        WHEN("we fix a variable to 0 while making a new cqm") {
+            auto sub_cqm = cqm.fix_variables({2}, {0});
+
+            THEN("the constraint is still discrete") {
+                CHECK(sub_cqm.num_variables() == 4);
+                REQUIRE(sub_cqm.num_constraints() == 1);
+                CHECK(sub_cqm.constraint_ref(0).marked_discrete());
+                CHECK(sub_cqm.constraint_ref(0).is_onehot());
+            }
+        }
+
+        WHEN("we fix a variable to 1 while making a new cqm") {
+            auto sub_cqm = cqm.fix_variables({2}, {1});
+
+            THEN("the constraint is no longer discrete") {
+                CHECK(sub_cqm.num_variables() == 4);
+                REQUIRE(sub_cqm.num_constraints() == 1);
+                CHECK(!sub_cqm.constraint_ref(0).marked_discrete());
+                CHECK(!sub_cqm.constraint_ref(0).is_onehot());
+            }
+        }
     }
 
     GIVEN("A constraint with one-hot constraints") {
@@ -464,6 +560,121 @@ TEST_CASE("Bug 0") {
             CHECK(cqm.constraint_ref(0).variables() == std::vector<int>{0, 1});
             cqm.remove_variable(1);
             CHECK(cqm.constraint_ref(0).variables() == std::vector<int>{0});
+        }
+    }
+}
+
+TEST_CASE("Test constraints view") {
+    GIVEN("a CQM with one variable and 10 constraints") {
+        auto cqm = ConstrainedQuadraticModel<double>();
+        auto x = cqm.add_variable(Vartype::BINARY);
+        for (int i = 0; i < 10; ++i) {
+            cqm.add_linear_constraint({x}, {static_cast<double>(i)}, Sense::EQ, i);
+        }
+
+        THEN("range-based for loops work over the constraints") {
+            int i = 0;
+            for (auto& c : cqm.constraints()) {
+                CHECK(c.linear(x) == i);
+                c.set_linear(x, i - 1);  // can modify
+                CHECK(c.linear(x) == i - 1);
+                ++i;
+            }
+        }
+
+        THEN("const iteration functions") {
+            int i = 0;
+            for (auto it = cqm.constraints().cbegin(); it != cqm.constraints().cend(); ++it, ++i) {
+                CHECK(it->linear(x) == i);
+                // it->set_linear(x, i-1);  // raises compiler error
+            }
+        }
+
+        THEN("we can access the constraints by index") {
+            for (int i = 0; i < 10; ++i) {
+                CHECK(cqm.constraints()[i].linear(x) == i);
+                CHECK(cqm.constraints().at(i).linear(x) == i);
+
+                cqm.constraints()[i].set_linear(x, i + 1);
+                CHECK(cqm.constraints()[i].linear(x) == i + 1);
+
+                cqm.constraints().at(i).set_linear(x, i - 1);
+                CHECK(cqm.constraints()[i].linear(x) == i - 1);
+
+                CHECK_THROWS_AS(cqm.constraints().at(100), std::out_of_range);
+            }
+        }
+
+        AND_GIVEN("a const reference to the cqm") {
+            const dimod::ConstrainedQuadraticModel<double>& const_cqm = cqm;
+
+            THEN("range-based for loops work over the constraints") {
+                int i = 0;
+                for (auto& c : const_cqm.constraints()) {
+                    CHECK(c.linear(x) == i);
+                    // c.set_linear(x, i-1);  // raises compiler error
+                    ++i;
+                }
+            }
+
+            THEN("we can access the constraints by index") {
+                for (int i = 0; i < 10; ++i) {
+                    CHECK(const_cqm.constraints()[i].linear(x) == i);
+                    CHECK(const_cqm.constraints().at(i).linear(x) == i);
+
+                    CHECK_THROWS_AS(const_cqm.constraints().at(100), std::out_of_range);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("Test Constraint::scale()") {
+    GIVEN("A CQM with several constraints") {
+        auto cqm = dimod::ConstrainedQuadraticModel<double>();
+        cqm.add_variables(Vartype::BINARY, 1);
+        auto c0 = cqm.add_linear_constraint({0}, {4}, Sense::EQ, 2);
+        auto c1 = cqm.add_linear_constraint({0}, {4}, Sense::LE, 2);
+        auto c2 = cqm.add_linear_constraint({0}, {4}, Sense::GE, 2);
+
+            cqm.constraint_ref(c0).set_offset(8);
+            cqm.constraint_ref(c1).set_offset(8);
+            cqm.constraint_ref(c2).set_offset(8);
+
+        WHEN("we scale the constraints by a positive number") {
+            cqm.constraint_ref(c0).scale(.5);
+            cqm.constraint_ref(c1).scale(.5);
+            cqm.constraint_ref(c2).scale(.5);
+
+            THEN("the biases are scaled and everything else stays the same") {
+                for (auto c = c0; c <= c2; ++c) {
+                    CHECK(cqm.constraint_ref(c).offset() == 4);
+                    CHECK(cqm.constraint_ref(c).linear(0) == 2);
+                    CHECK(cqm.constraint_ref(c).rhs() == 1);
+                }
+
+                CHECK(cqm.constraint_ref(c0).sense() == Sense::EQ);
+                CHECK(cqm.constraint_ref(c1).sense() == Sense::LE);
+                CHECK(cqm.constraint_ref(c2).sense() == Sense::GE);
+            }
+        }
+
+        WHEN("we scale the constraints by a negative number") {
+            cqm.constraint_ref(c0).scale(-.5);
+            cqm.constraint_ref(c1).scale(-.5);
+            cqm.constraint_ref(c2).scale(-.5);
+
+            THEN("the biases are scaled and some of the signs flip") {
+                for (auto c = c0; c <= c2; ++c) {
+                    CHECK(cqm.constraint_ref(c).offset() == -4);
+                    CHECK(cqm.constraint_ref(c).linear(0) == -2);
+                    CHECK(cqm.constraint_ref(c).rhs() == -1);
+                }
+
+                CHECK(cqm.constraint_ref(c0).sense() == Sense::EQ);
+                CHECK(cqm.constraint_ref(c1).sense() == Sense::GE);  // flipped
+                CHECK(cqm.constraint_ref(c2).sense() == Sense::LE);  // flipped
+            }
         }
     }
 }
@@ -652,4 +863,5 @@ TEST_CASE("Test Expression::add_quadratic()") {
         }
     }
 }
+
 }  // namespace dimod
