@@ -1064,8 +1064,8 @@ class TestMIMO(unittest.TestCase):
         Fsimple = np.identity(Nt) # Nt=Nr
         #BPSK, real channel:
         #transmitted_symbols_simple = np.ones(shape=(Nt,1))
-        #transmitted_symbols = mimo.create_transmitted_symbols(Nt, amps=[-1,1], quadrature=False)
-        transmitted_symbolsQAM,_ = dimod.generators.mimo.create_transmitted_symbols(Nt, amps=[-3,-1,1,3], quadrature=True)
+        #transmitted_symbols = mimo._create_transmitted_symbols(Nt, amps=[-1,1], quadrature=False)
+        transmitted_symbolsQAM,_ = dimod.generators.mimo._create_transmitted_symbols(Nt, amps=[-3,-1,1,3], quadrature=True)
         y = np.matmul(F, transmitted_symbolsQAM)
         # Defaults
         W = dimod.generators.mimo.linear_filter(F=F)
@@ -1138,6 +1138,29 @@ class TestMIMO(unittest.TestCase):
         spins = dimod.generators.mimo.symbols_to_spins(symbols=spins, modulation='BPSK')
         self.assertTrue(np.all(spins == symbols))
             
+    def test_constellation_properties(self):
+        _cp = dimod.generators.mimo._constellation_properties
+        self.assertEqual(_cp("QPSK")[0], 2)
+        self.assertEqual(sum(_cp("16QAM")[1]), 4)
+        self.assertEqual(_cp("64QAM")[2], 42.0) 
+        with self.assertRaises(ValueError):
+            bits_per_transmitter, amps, constellation_mean_power = _cp("dummy")
+
+    def test_create_transmitted_symbols(self):
+        _cts = dimod.generators.mimo._create_transmitted_symbols
+        self.assertTrue(_cts(1, amps=[-1, 1], quadrature=False)[0][0][0] in [-1, 1])
+        self.assertTrue(_cts(1, amps=[-1, 1])[0][0][0].real in [-1, 1])
+        self.assertTrue(_cts(1, amps=[-1, 1])[0][0][0].imag in [-1, 1])
+        self.assertEqual(len(_cts(5, amps=[-1, 1])[0]), 5)
+        self.assertTrue(np.isin(_cts(20, amps=[-1, -3, 1, 3])[0].real, [-1, -3, 1, 3]).all())
+        self.assertTrue(np.isin(_cts(20, amps=[-1, -3, 1, 3])[0].imag, [-1, -3, 1, 3]).all())
+        with self.assertRaises(ValueError):
+            transmitted_symbols, random_state = _cts(1, amps=[-1.1, 1], quadrature=False)
+        with self.assertRaises(ValueError):
+            transmitted_symbols, random_state = _cts(1, amps=np.array([-1, 1.1]), quadrature=False)
+        with self.assertRaises(ValueError):
+            transmitted_symbols, random_state = _cts(1, amps=np.array([-1, 1+1j]))
+
     def test_complex_symbol_coding(self):
         num_symbols = 5
         mod_pref = [1, 2, 3]
