@@ -1032,6 +1032,12 @@ class TestSatisfiability(unittest.TestCase):
 
 class TestMIMO(unittest.TestCase):
 
+    def setUp(self):
+
+        self.symbols_bpsk = np.asarray([[-1, 1]])
+        self.symbols_qam = lambda a: np.array([[complex(i, j)] \
+            for i in range(-a, a + 1, 2) for j in range(-a, a + 1, 2)])
+
     def _effective_fields(self, bqm):
         num_var = bqm.num_variables
         effFields = np.zeros(num_var)
@@ -1041,7 +1047,6 @@ class TestMIMO(unittest.TestCase):
         for key in bqm.linear:
             effFields[key] += bqm.linear[key]
         return effFields
-
         
     def test_filter_marginal_estimators(self):
         
@@ -1129,13 +1134,49 @@ class TestMIMO(unittest.TestCase):
                 #self.assertEqual(h.shape[0], num_var*mod_pref[modI])
                 #self.assertLess(abs(bqm.offset-np.sum(np.diag(J))), 1e-8)
 
+    def test_symbols_to_spins(self):
+        # Standard symbol cases (2D input):
+        spins = dimod.generators.mimo._symbols_to_spins(self.symbols_bpsk, 
+            modulation='BPSK')
+        self.assertEqual(spins.sum(), 0)
+        self.assertTrue(spins.ndim, 2)
+
+        spins = dimod.generators.mimo._symbols_to_spins(self.symbols_qam(1), 
+            modulation='QPSK')
+        self.assertEqual(spins[:len(spins//2)].sum(), 0)
+        self.assertEqual(spins[len(spins//2):].sum(), 0)
+        self.assertTrue(spins.ndim, 2)
+
+        spins = dimod.generators.mimo._symbols_to_spins(self.symbols_qam(3), 
+            modulation='16QAM')
+        self.assertEqual(spins[:len(spins//2)].sum(), 0)
+        self.assertEqual(spins[len(spins//2):].sum(), 0)
+
+        spins = dimod.generators.mimo._symbols_to_spins(self.symbols_qam(5), 
+            modulation='64QAM')
+        self.assertEqual(spins[:len(spins//2)].sum(), 0)
+        self.assertEqual(spins[len(spins//2):].sum(), 0)
+
+        # Standard symbol cases (1D input):
+        spins = dimod.generators.mimo._symbols_to_spins(
+            self.symbols_qam(1).reshape(4,), 
+            modulation='QPSK')
+        self.assertTrue(spins.ndim, 1)
+        self.assertEqual(spins[:len(spins//2)].sum(), 0)
+        self.assertEqual(spins[len(spins//2):].sum(), 0)
+
+        # Unsupported input
+        with self.assertRaises(ValueError):
+            spins = dimod.generators.mimo._symbols_to_spins(self.symbols_bpsk, 
+            modulation='unsupported')
+                   
     def test_BPSK_symbol_coding(self):
         #This is simply read in read out.
         num_spins = 5
         spins = np.random.choice([-1, 1], size=num_spins)
         symbols = dimod.generators.mimo.spins_to_symbols(spins=spins, modulation='BPSK')
         self.assertTrue(np.all(spins == symbols))
-        spins = dimod.generators.mimo.symbols_to_spins(symbols=spins, modulation='BPSK')
+        spins = dimod.generators.mimo._symbols_to_spins(symbols=spins, modulation='BPSK')
         self.assertTrue(np.all(spins == symbols))
             
     def test_constellation_properties(self):
@@ -1173,12 +1214,12 @@ class TestMIMO(unittest.TestCase):
             symbols = max_symb*np.ones(num_symbols) + 1j*max_symb*np.ones(num_symbols)
             symbols_enc = dimod.generators.mimo.spins_to_symbols(spins=spins, modulation=mod)
             self.assertTrue(np.all(symbols_enc == symbols ))
-            spins_enc = dimod.generators.mimo.symbols_to_spins(symbols=symbols, modulation=mod)
+            spins_enc = dimod.generators.mimo._symbols_to_spins(symbols=symbols, modulation=mod)
             self.assertTrue(np.all(spins_enc == spins))
             #random encoding:
             spins = np.random.choice([-1, 1], size=num_spins)
             symbols_enc = dimod.generators.mimo.spins_to_symbols(spins=spins, modulation=mod)
-            spins_enc = dimod.generators.mimo.symbols_to_spins(symbols=symbols_enc, modulation=mod)
+            spins_enc = dimod.generators.mimo._symbols_to_spins(symbols=symbols_enc, modulation=mod)
             self.assertTrue(np.all(spins_enc == spins))
 
     def test_spin_encoded_mimo(self):
@@ -1204,7 +1245,7 @@ class TestMIMO(unittest.TestCase):
                 F_simple = np.ones(shape=(num_receivers, num_transmitters), dtype=dtype)
                 transmitted_symbols_max = np.ones(shape=(num_transmitters, 1), dtype=dtype)*constellation[-1]
                 transmitted_symbols_random = np.random.choice(constellation, size=(num_transmitters, 1))
-                transmitted_spins_random = dimod.generators.mimo.symbols_to_spins(
+                transmitted_spins_random = dimod.generators.mimo._symbols_to_spins(
                     symbols=transmitted_symbols_random.flatten(), modulation=modulation)
                 #Trivial channel (F_simple), machine numbers
                 bqm = dimod.generators.mimo.spin_encoded_mimo(modulation=modulation, 
@@ -1253,17 +1294,17 @@ class TestMIMO(unittest.TestCase):
     def create_signal(self):
         print('Add test')
     
-    def test_spin_encoded_comd(self):
-        bqm = dimod.generators.mimo.spin_encoded_comd(lattice=1, modulation='BPSK')
+    def test_spin_encoded_comp(self):
+        bqm = dimod.generators.mimo.spin_encoded_comp(lattice=1, modulation='BPSK')
         lattice = dimod.generators.mimo._make_honeycomb(1)
-        bqm = dimod.generators.mimo.spin_encoded_comd(lattice=lattice, num_transmitters_per_node=1, num_receivers_per_node=1,
+        bqm = dimod.generators.mimo.spin_encoded_comp(lattice=lattice, num_transmitters_per_node=1, num_receivers_per_node=1,
                                                       modulation='BPSK')
         num_var = lattice.number_of_nodes()
         self.assertEqual(num_var,bqm.num_variables)
         self.assertEqual(21,bqm.num_interactions)
         # Transmitted symbols are 1 by default
         lattice = dimod.generators.mimo._make_honeycomb(2)
-        bqm = dimod.generators.mimo.spin_encoded_comd(lattice=lattice,
+        bqm = dimod.generators.mimo.spin_encoded_comp(lattice=lattice,
                                                       num_transmitters_per_node=2,
                                                       num_receivers_per_node=2,
                                                       modulation='BPSK', SNRb=float('Inf'), use_offset=True)
@@ -1313,12 +1354,12 @@ class TestMIMO(unittest.TestCase):
                             lattice = nx.Graph()
                             lattice.add_edges_from((i,(i+1)%lattice_size) for i in range(num_transmitters//num_transmitter_block))
                             for seed in range(1):
-                                bqm = dimod.generators.mimo.spin_encoded_comd(lattice=lattice,
+                                bqm = dimod.generators.mimo.spin_encoded_comp(lattice=lattice,
                                                                               num_transmitters_per_node=num_transmitter_block,
                                                                               num_receivers_per_node=num_receiver_block,
                                                                               modulation=mod, SNRb=SNRb,
                                                                               use_offset=True)
-                                bqm0 = dimod.generators.mimo.spin_encoded_comd(lattice=lattice,
+                                bqm0 = dimod.generators.mimo.spin_encoded_comp(lattice=lattice,
                                                                                num_transmitters_per_node=num_transmitter_block,
                                                                                num_receivers_per_node=num_receiver_block,
                                                                                modulation=mod,

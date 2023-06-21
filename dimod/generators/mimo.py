@@ -82,11 +82,13 @@ def _amplitude_modulated_quadratic_form(h, J, modulation):
         hA = np.kron(amps[:, np.newaxis], h)
         JA = np.kron(np.kron(amps[:, np.newaxis], amps[np.newaxis, :]), J)
         return hA, JA 
-
+      
+def _symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
+    """Convert quadrature amplitude modulated (QAM) symbols to spins. 
     
-    
-def symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
-    "Converts binary/quadrature amplitude modulated symbols to spins, assuming linear encoding"
+    Encoding must be linear. Supports binary phase-shift keying (BPSK, or 2-QAM) 
+    and quadrature (QPSK, or 4-QAM).     
+    """
     num_transmitters = len(symbols)
     if modulation == 'BPSK':
         return symbols.copy()
@@ -101,22 +103,23 @@ def symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
         else:
             raise ValueError('Unsupported modulation')
         # A map from integer parts to real is clearest (and sufficiently performant), 
-        # generalizes to gray code more easily as well:
+        # generalizes to Gray coding more easily as well:
         
         symb_to_spins = { np.sum([x*2**xI for xI, x in enumerate(spins)]) : spins
-                          for spins in product(*[(-1, 1) for x in range(spins_per_real_symbol)])}
+                          for spins in product(*spins_per_real_symbol*[(-1, 1)])}
         spins = np.concatenate([np.concatenate(([symb_to_spins[symb][prec] for symb in symbols.real.flatten()], 
                                                 [symb_to_spins[symb][prec] for symb in symbols.imag.flatten()]))
                                 for prec in range(spins_per_real_symbol)])
-        if len(symbols.shape)>2:
-            if symbols.shape[0] == 1:
-                # If symbols shaped as vector, return as vector:
-                spins.reshape((1,len(spins)))
-            elif symbols.shape[1] == 1:
-                spins.reshape((len(spins),1))
-            else:
-                # Leave for manual reshaping
-                pass 
+        if len(symbols.shape) > 2:
+            raise ValueError(f"`symbols` should be 1 or 2 dimensional but is shape {symbols.shape}")
+        if symbols.ndim == 1:    # If symbols shaped as vector, return as vector
+            spins.reshape((len(spins), ))
+        # elif symbols.shape[0] == 1:   #Jack: I think this is already baked in
+        #     spins.reshape((1, len(spins)))
+        # elif symbols.shape[1] == 1:
+        #     spins.reshape((len(spins), 1))
+        # else:   # Leave for manual reshaping
+        #     pass 
     return spins
 
 
