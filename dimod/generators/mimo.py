@@ -82,11 +82,13 @@ def _amplitude_modulated_quadratic_form(h, J, modulation):
         hA = np.kron(amps[:, np.newaxis], h)
         JA = np.kron(np.kron(amps[:, np.newaxis], amps[np.newaxis, :]), J)
         return hA, JA 
-
+      
+def _symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
+    """Convert quadrature amplitude modulated (QAM) symbols to spins. 
     
-    
-def symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
-    "Converts binary/quadrature amplitude modulated symbols to spins, assuming linear encoding"
+    Encoding must be linear. Supports binary phase-shift keying (BPSK, or 2-QAM) 
+    and quadrature (QPSK, or 4-QAM).     
+    """
     num_transmitters = len(symbols)
     if modulation == 'BPSK':
         return symbols.copy()
@@ -101,22 +103,23 @@ def symbols_to_spins(symbols: np.array, modulation: str) -> np.array:
         else:
             raise ValueError('Unsupported modulation')
         # A map from integer parts to real is clearest (and sufficiently performant), 
-        # generalizes to gray code more easily as well:
+        # generalizes to Gray coding more easily as well:
         
         symb_to_spins = { np.sum([x*2**xI for xI, x in enumerate(spins)]) : spins
-                          for spins in product(*[(-1, 1) for x in range(spins_per_real_symbol)])}
+                          for spins in product(*spins_per_real_symbol*[(-1, 1)])}
         spins = np.concatenate([np.concatenate(([symb_to_spins[symb][prec] for symb in symbols.real.flatten()], 
                                                 [symb_to_spins[symb][prec] for symb in symbols.imag.flatten()]))
                                 for prec in range(spins_per_real_symbol)])
-        if len(symbols.shape)>2:
-            if symbols.shape[0] == 1:
-                # If symbols shaped as vector, return as vector:
-                spins.reshape((1,len(spins)))
-            elif symbols.shape[1] == 1:
-                spins.reshape((len(spins),1))
-            else:
-                # Leave for manual reshaping
-                pass 
+        if len(symbols.shape) > 2:
+            raise ValueError(f"`symbols` should be 1 or 2 dimensional but is shape {symbols.shape}")
+        if symbols.ndim == 1:    # If symbols shaped as vector, return as vector
+            spins.reshape((len(spins), ))
+        # elif symbols.shape[0] == 1:   #Jack: I think this is already baked in
+        #     spins.reshape((1, len(spins)))
+        # elif symbols.shape[1] == 1:
+        #     spins.reshape((len(spins), 1))
+        # else:   # Leave for manual reshaping
+        #     pass 
     return spins
 
 
@@ -291,44 +294,62 @@ def create_channel(num_receivers: int = 1, num_transmitters: int = 1,
         F = F*attenuation_matrix #Dense format for now, this is slow.
         channel_power *= np.mean(np.sum(attenuation_matrix*attenuation_matrix, axis=0))
 
+
     return F, channel_power, random_state
 
-def constellation_properties(modulation):
-    """ bits per symbol, constellation mean power, and symbol amplitudes. 
-    
-    The constellation mean power assumes symbols are sampled uniformly at
-    random for the signal (standard).
-    """
-    
-    if modulation == 'BPSK':
-        bits_per_transmitter = 1
-        constellation_mean_power = 1
-        amps = np.ones(1)
-    else:
-        bits_per_transmitter = 2
-        if modulation == 'QPSK':
-            amps = np.ones(1)
-        elif modulation == '16QAM':
-            amps = 1+2*np.arange(2)
-            bits_per_transmitter *= 2
-        elif modulation == '64QAM':
-            amps = 1+2*np.arange(4)
-            bits_per_transmitter *= 3
-        elif modulation == '256QAM':
-            amps = 1+2*np.arange(8)
-            bits_per_transmitter *= 4
-        else:
-            raise ValueError('Unsupported modulation method')
-        constellation_mean_power = 2*np.mean(amps*amps)
-    return bits_per_transmitter, amps, constellation_mean_power
+constellation = {   # bits per transmitter (bpt) and amplitudes (amps)
+    "BPSK": [1, np.ones(1)],       
+    "QPSK": [2, np.ones(1)],
+    "16QAM": [4, 1+2*np.arange(2)],
+    "64QAM": [6, 1+2*np.arange(4)],
+    "256QAM": [8, 1+2*np.arange(8)]} 
 
-def create_transmitted_symbols(num_transmitters, amps: Iterable = [-1,1],quadrature: bool = True, random_state=None):
-    """Symbols are generated uniformly at random as a funtion of the quadrature and amplitude modulation. 
-    Note that the power per symbol is not normalized. The signal power is thus proportional to 
-    Nt*sig2; where sig2 = [1,2,10,42] for BPSK, QPSK, 16QAM and 64QAM respectively. The complex and 
-    real valued parts of all constellations are integer.
+
+def _constellation_properties(modulation):
+    """Return bits per symbol, symbol amplitudes, and mean power for QAM constellation. 
+    
+    Constellation mean power makes the standard assumption that symbols are 
+    sampled uniformly at random for the signal.
+    """
+
+    bpt_amps = constellation.get(modulation)
+    if not bpt_amps:
+        raise ValueError('Unsupported modulation method')
+    
+    constellation_mean_power = 1 if modulation == 'BPSK' else 2*np.mean(bpt_amps[1]*bpt_amps[1]) 
+
+    return bpt_amps[0], bpt_amps[1], constellation_mean_power 
+
+def _create_transmitted_symbols(num_transmitters, 
+                                amps=[-1, 1], 
+                                quadrature=True, 
+                                random_state=None):
+    """Generate symbols.
+
+    Symbols are generated uniformly at random as a function of the quadrature 
+    and amplitude modulation. 
+    
+    The power per symbol is not normalized, it is proportional to :math:`N_t*sig2`, 
+    where :math:`sig2 = [1, 2, 10, 42]` for BPSK, QPSK, 16QAM and 64QAM respectively. 
+    
+    The complex and real-valued parts of all constellations are integer.
+
+    args:
+        num_transmitters: Number of transmitters.
+
+        amps: Amplitudes as an interable. 
+
+        quadrature: Quadrature (True) or only phase-shift keying such as BPSK (False).
+
+        random_state: Seed for a random state or a random state.
     
     """
+
+    if any(np.iscomplex(amps)):
+        raise ValueError('Amplitudes cannot have complex values')
+    if any(np.modf(amps)[0]):
+        raise ValueError('Amplitudes must have integer values')
+    
     if type(random_state) is not np.random.mtrand.RandomState:
         random_state = np.random.RandomState(random_state)
     
@@ -336,7 +357,8 @@ def create_transmitted_symbols(num_transmitters, amps: Iterable = [-1,1],quadrat
         transmitted_symbols = random_state.choice(amps, size=(num_transmitters, 1))
     else: 
         transmitted_symbols = random_state.choice(amps, size=(num_transmitters, 1)) \
-                            + 1j * random_state.choice(amps, size=(num_transmitters, 1))
+            + 1j * random_state.choice(amps, size=(num_transmitters, 1))
+        
     return transmitted_symbols, random_state
 
 def create_signal(F, transmitted_symbols=None, channel_noise=None,
@@ -355,14 +377,14 @@ def create_signal(F, transmitted_symbols=None, channel_noise=None,
     if channel_power == None:
         #Assume its proportional to num_transmitters, i.e. every channel component is RMSE 1 and 1 bit
         channel_power = num_transmitters
-    bits_per_transmitter, amps, constellation_mean_power = constellation_properties(modulation)
+    bits_per_transmitter, amps, constellation_mean_power = _constellation_properties(modulation)
     if transmitted_symbols is None:
         if type(random_state) is not np.random.mtrand.RandomState:
             random_state = np.random.RandomState(random_state)
         if modulation == 'BPSK':
-            transmitted_symbols, random_state = create_transmitted_symbols(num_transmitters,amps=amps,quadrature=False,random_state=random_state)
+            transmitted_symbols, random_state = _create_transmitted_symbols(num_transmitters,amps=amps,quadrature=False,random_state=random_state)
         else:
-            transmitted_symbols, random_state = create_transmitted_symbols(num_transmitters,amps=amps,quadrature=True,random_state=random_state)
+            transmitted_symbols, random_state = _create_transmitted_symbols(num_transmitters,amps=amps,quadrature=True,random_state=random_state)
             
 
     if SNRb <= 0:
