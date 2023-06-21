@@ -239,7 +239,7 @@ def create_channel(num_receivers: int = 1, num_transmitters: int = 1,
     Channel power is the expected root mean square signal per receiver; i.e., 
     :math:`mean(F^2)*num_transmitters` for homogeneous codes.
 
-    args:
+    Args:
         num_receivers: Number of receivers.
 
         num_transmitters: Number of transmitters.
@@ -255,7 +255,10 @@ def create_channel(num_receivers: int = 1, num_transmitters: int = 1,
         chip communication ... Jack: what does this represent in the field?
 
     Returns:
-        Three-tuple of channel, channel power, and the random state used. 
+        Three-tuple of channel, channel power, and the random state used, where 
+        the channel is an :math:`i \times j` matrix with :math:`i` rows 
+        corresponding to the receivers and :math:`j` columns to the transmitters, 
+        and channel power is a number. 
 
     """
 
@@ -304,7 +307,6 @@ constellation = {   # bits per transmitter (bpt) and amplitudes (amps)
     "64QAM": [6, 1+2*np.arange(4)],
     "256QAM": [8, 1+2*np.arange(8)]} 
 
-
 def _constellation_properties(modulation):
     """Return bits per symbol, symbol amplitudes, and mean power for QAM constellation. 
     
@@ -334,7 +336,7 @@ def _create_transmitted_symbols(num_transmitters,
     
     The complex and real-valued parts of all constellations are integer.
 
-    args:
+    Args:
         num_transmitters: Number of transmitters.
 
         amps: Amplitudes as an interable. 
@@ -342,6 +344,11 @@ def _create_transmitted_symbols(num_transmitters,
         quadrature: Quadrature (True) or only phase-shift keying such as BPSK (False).
 
         random_state: Seed for a random state or a random state.
+
+    Returns:
+
+        Two-tuple of symbols and the random state used, where the symbols is 
+        a column vector of length ``num_transmitters``.
     
     """
 
@@ -361,57 +368,99 @@ def _create_transmitted_symbols(num_transmitters,
         
     return transmitted_symbols, random_state
 
-def create_signal(F, transmitted_symbols=None, channel_noise=None,
+def _create_signal(F, transmitted_symbols=None, channel_noise=None,
                   SNRb=float('Inf'), modulation='BPSK', channel_power=None,
-                  random_state=None, F_norm = 1, v_norm = 1):
-    """ Creates a signal y = F v + n; generating random transmitted symbols and noise as necessary. 
-    F is assumed to consist of i.i.d elements such that Fdagger*F = Nr Identity[Nt]*channel_power. 
-    v are assumed to consist of i.i.d unscaled constellations elements (integer valued in real
-    and complex parts). mean_constellation_power dictates a rescaling relative to E[v v^dagger] = Identity[Nt]
-    channel_noise is assumed, or created to be suitably scaled. N0 Identity[Nt] =  
-    SNRb = /
+                  random_state=None):
+    """Create signal y = F v + n. 
+    
+    Generates random transmitted symbols and noise as necessary. 
+
+    F is assumed to consist of independent and identically distributed (i.i.d) 
+    elements such that :math:`F\dagger*F = N_r I[N_t]*cp` where :math:`I` is 
+    the identity matrix and :math:`cp` the channel power.
+
+    v are assumed to consist of i.i.d unscaled constellations elements (integer 
+    valued in real and complex parts). Mean constellation power dictates a 
+    rescaling relative to :math:`E[v v\dagger] = I[Nt]`. 
+    
+    ``channel_noise`` is assumed, or created, to be suitably scaled. N0 Identity[Nt] =  
+    SNRb = /   @jack, please finish this statement; also I removed unused F_norm = 1, v_norm = 1
+
+    Args:
+        F: Wireless channel as an :math:`i \times j` matrix of complex values, 
+            where :math:`i` rows correspond to :math:`y_i` receivers and :math:`j` 
+            columns correspond to :math:`v_i` transmitted symbols. 
+
+        transmitted_symbols: Transmitted symbols as a column vector.
+
+        channel_noise: Channel noise as a complex value.
+
+        SNRb: Signal-to-noise ratio.
+
+        modulation: Modulation. Supported values are 'BPSK', 'QPSK', '16QAM', 
+            '64QAM', and '256QAM'.
+
+        channel_power: Channel power. By default, proportional to the number 
+            of transmitters. 
+
+        random_state: Seed for a random state or a random state.
+
+    Returns:
+        Four-tuple of received signals (``y``), transmitted symbols (``v``), 
+        channel noise, and random_state, where ``y`` is a column vector of length
+        equal to the rows of ``F``.
     """
-    #random_state = np.random.RandomState(1) ##DEBUG
+
     num_receivers = F.shape[0]
-    num_transmitters = F.shape[1] 
-    if channel_power == None:
-        #Assume its proportional to num_transmitters, i.e. every channel component is RMSE 1 and 1 bit
-        channel_power = num_transmitters
+    num_transmitters = F.shape[1]
+
+    if not random_state:
+        random_state = np.random.RandomState(10)
+    elif type(random_state) is not np.random.mtrand.RandomState:
+        random_state = np.random.RandomState(random_state)
+ 
     bits_per_transmitter, amps, constellation_mean_power = _constellation_properties(modulation)
-    if transmitted_symbols is None:
+
+    if transmitted_symbols is not None:
+        if modulation == 'BPSK' and any(np.iscomplex(transmitted_symbols)):
+            raise ValueError(f"BPSK transmitted signals must be real")
+        if modulation != 'BPSK' and any(np.isreal(transmitted_symbols)):
+            raise ValueError(f"Quadrature transmitted signals must be complex")
+    else:
         if type(random_state) is not np.random.mtrand.RandomState:
             random_state = np.random.RandomState(random_state)
-        if modulation == 'BPSK':
-            transmitted_symbols, random_state = _create_transmitted_symbols(num_transmitters,amps=amps,quadrature=False,random_state=random_state)
-        else:
-            transmitted_symbols, random_state = _create_transmitted_symbols(num_transmitters,amps=amps,quadrature=True,random_state=random_state)
-            
-
+        
+        quadrature = False if modulation == 'BPSK' else True
+        transmitted_symbols, random_state = _create_transmitted_symbols(
+                num_transmitters, amps=amps, quadrature=quadrature, random_state=random_state)
+           
     if SNRb <= 0:
-       raise ValueError(f"Expect positive signal to noise ratio. SNRb={SNRb}")
-    elif SNRb < float('Inf'):
-        # Energy_per_bit:
-        Eb = channel_power*constellation_mean_power/bits_per_transmitter #Eb is the same for QPSK and BPSK
-        # Eb/N0 = SNRb (N0 = 2 sigma^2, the one-sided PSD ~ kB T at antenna)
-        # SNRb and Eb, together imply N0
-        N0 = Eb/SNRb
-        sigma = np.sqrt(N0/2) # Noise is complex by definition, hence 1/2 power in real and complex parts
-        if channel_noise is None:
-            
-            if type(random_state) is not np.random.mtrand.RandomState:
-                random_state = np.random.RandomState(random_state)
-            # Channel noise of covariance N0* I_{NR}. Noise is complex by definition, although
-            # for real channel and symbols we need only worry about real part:
-            if transmitted_symbols.dtype==np.float64 and F.dtype==np.float64:
-                channel_noise = sigma*random_state.normal(0, 1, size=(num_receivers, 1))
-                # Complex part is irrelevant
-            else:
-                channel_noise = sigma*(random_state.normal(0, 1, size=(num_receivers, 1)) \
-                                       + 1j*random_state.normal(0, 1, size=(num_receivers, 1)))
-            
+       raise ValueError(f"signal-to-noise ratio must be positive. SNRb={SNRb}")
+    
+    if SNRb == float('Inf'):
+       y = np.matmul(F, transmitted_symbols)
+    elif channel_noise is not None:
         y = channel_noise + np.matmul(F, transmitted_symbols)
     else:
-        y = np.matmul(F, transmitted_symbols)
+        # Energy_per_bit:
+        if channel_power == None:   
+            #Assume proportional to num_transmitters; i.e., every channel component is RMSE 1 and 1 bit
+            channel_power = num_transmitters
+
+        Eb = channel_power * constellation_mean_power / bits_per_transmitter #Eb is the same for QPSK and BPSK
+        # Eb/N0 = SNRb (N0 = 2 sigma^2, the one-sided PSD ~ kB T at antenna)
+        # SNRb and Eb, together imply N0
+        N0 = Eb / SNRb
+        sigma = np.sqrt(N0/2) # Noise is complex by definition, hence 1/2 power in real and complex parts
+
+        # Channel noise of covariance N0*I_{NR}. Noise is complex by definition, although
+        # for real channel and symbols we need only worry about real part:
+        channel_noise = sigma*(random_state.normal(0, 1, size=(num_receivers, 1)) \
+            + 1j*random_state.normal(0, 1, size=(num_receivers, 1)))
+        if modulation == 'BPSK' and np.isreal(F).all():
+            channel_noise = channel_noise.real
+            
+        y = channel_noise + np.matmul(F, transmitted_symbols)
 
     return y, transmitted_symbols, channel_noise, random_state
 
@@ -564,7 +613,7 @@ def spin_encoded_mimo(modulation: str, y: Union[np.array, None] = None, F: Union
         channel_power = num_transmitters
        
     if y is None:
-        y, _, _, _ = create_signal(F, transmitted_symbols=transmitted_symbols, channel_noise=channel_noise,
+        y, _, _, _ = _create_signal(F, transmitted_symbols=transmitted_symbols, channel_noise=channel_noise,
                                    SNRb=SNRb, modulation=modulation, channel_power=channel_power,
                                    random_state=seed)
     

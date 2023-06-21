@@ -1327,9 +1327,56 @@ class TestMIMO(unittest.TestCase):
         self.assertLess(c.ptp(), 8)
         self.assertEqual(cp, 30)
         
-    def create_signal(self):
-        print('Add test')
-    
+    def test_create_signal(self):
+        # Only required parameters
+        got, sent, noise, _ = dimod.generators.mimo._create_signal(F=np.array([[1]]))
+        self.assertEqual(got, sent)
+        self.assertTrue(all(np.isreal(got)))
+        self.assertIsNone(noise)
+
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[-1]]))
+        self.assertEqual(got, -sent)
+
+        got, sent, noise, _ = dimod.generators.mimo._create_signal(F=np.array([[1], [1]]))
+        self.assertEqual(got.shape, (2, 1))
+        self.assertEqual(sent.shape, (1, 1))
+        self.assertIsNone(noise)
+
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1, 1]]))
+        self.assertEqual(got.shape, (1, 1))
+        self.assertEqual(sent.shape, (2, 1))
+
+        # Optional parameters
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1]]), modulation="QPSK")
+        self.assertTrue(all(np.iscomplex(got)))
+        self.assertTrue(all(np.iscomplex(sent)))
+        self.assertEqual(got.shape, (1, 1))
+        self.assertEqual(got, sent)
+
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1]]))
+        self.assertEqual(got, sent)
+        self.assertEqual(got[0][0], 1)
+
+        with self.assertRaises(ValueError): # Complex symbols for BPSK
+            a, b, c, d = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1+1j]]))
+
+        with self.assertRaises(ValueError): # Non-complex symbols for non-BPSK
+            a, b, c, d = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1]]), modulation="QPSK")
+
+        noise = 0.2+0.3j
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1]]), channel_noise=noise)
+        self.assertEqual(got, sent)
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1]]), channel_noise=noise, SNRb=10 )
+        self.assertEqual(got, sent + noise)
+        got, sent, _, __ = dimod.generators.mimo._create_signal(F=np.array([[1]]), 
+            transmitted_symbols=np.array([[1]]), SNRb=10 )
+        self.assertNotEqual(got, sent)
+   
     def test_spin_encoded_comp(self):
         bqm = dimod.generators.mimo.spin_encoded_comp(lattice=1, modulation='BPSK')
         lattice = dimod.generators.mimo._make_honeycomb(1)
@@ -1360,9 +1407,9 @@ class TestMIMO(unittest.TestCase):
                             EoverN *= 2 #Real part only
                         for seed in range(1):
                             #F,channel_power,random_state = dimod.generators.mimo.create_channel(num_transmitters=num_transmitters,num_receivers=num_receivers,random_state=seed)
-                            #y,t,n,_ = dimod.generators.mimo.create_signal(F,modulation=mod,channel_power=channel_power,random_state=random_state)
+                            #y,t,n,_ = dimod.generators.mimo._create_signal(F,modulation=mod,channel_power=channel_power,random_state=random_state)
                             #F,channel_power,random_state = dimod.generators.mimo.create_channel(num_transmitters=num_transmitters,num_receivers=num_receivers,random_state=seed)
-                            #y,t,n,_ = dimod.generators.mimo.create_signal(F,modulation=mod,channel_power=channel_power,SNRb=1,random_state=random_state)
+                            #y,t,n,_ = dimod.generators.mimo._create_signal(F,modulation=mod,channel_power=channel_power,SNRb=1,random_state=random_state)
 
                             bqm0 = dimod.generators.mimo.spin_encoded_mimo(modulation=mod,
                                                                           num_transmitters=num_transmitters,
