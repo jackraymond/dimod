@@ -1059,6 +1059,7 @@ class TestMIMO(unittest.TestCase):
         return effFields
         
     def test_filter_marginal_estimators(self):
+        # Tested but so far this function is unused
         
         filtered_signal = np.random.random(20) + np.arange(-20,20,2)
         estimated_source = dimod.generators.mimo.filter_marginal_estimator(filtered_signal, 'BPSK')
@@ -1125,7 +1126,10 @@ class TestMIMO(unittest.TestCase):
         h, J = dimod.generators.mimo._real_quadratic_form(h, J)
         val3 = np.matmul(vUnwrap.T, np.matmul(J, vUnwrap)) + np.matmul(h.T, vUnwrap) + k
         self.assertLess(abs(val3), 1e-8)
-        
+
+    def test_real_quadratic_form(self):
+        print('Add tests for _real_quadratic_form')
+
     def test_amplitude_modulated_quadratic_form(self):
         num_var = 3
         h = np.random.random(size=(num_var, 1))
@@ -1143,6 +1147,12 @@ class TestMIMO(unittest.TestCase):
                 self.assertLess(abs(max_val*max_val*np.sum(J)-np.sum(JO)), 1e-8)
                 #self.assertEqual(h.shape[0], num_var*mod_pref[modI])
                 #self.assertLess(abs(bqm.offset-np.sum(np.diag(J))), 1e-8)
+
+    def test_yF_to_hJ(self):
+        print('Add tests for _yF_to_hJ')
+
+    def test_spins_to_symbols(self):
+        print('Add tests for spins_to_symbols')
 
     def test_symbols_to_spins(self):
         # Standard symbol cases (2D input):
