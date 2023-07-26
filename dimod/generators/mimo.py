@@ -34,6 +34,16 @@ mod_config = { # bits per transmitter, amplitudes, transmitters_per_spin, number
     "256QAM": {"bpt": 8, "amps": 8, "tps": 8, "na": 5, "sps": 4}   #JP: check numbers for 256QAM
     }
 
+def make_random_state(seed_or_state):
+    if not seed_or_state:
+        return np.random.RandomState(None)
+    elif type(seed_or_state) is np.random.mtrand.RandomState:
+        return seed_or_state
+    elif type(seed_or_state) is int:
+        return np.random.RandomState(seed_or_state)
+    else:
+        raise ValueError(f"Unsupported seed type: {seed_or_state}")
+
 # def supported_modulation(f):      JP: would be nicer but needs work
 #     @wraps(f)
 #     def check_support(*args, **kwargs):
@@ -389,22 +399,20 @@ def create_channel(num_receivers: int = 1, num_transmitters: int = 1,
         has some additional branches that make things more explicit.
 
     Returns:
-        Three-tuple of channel, channel power, and the random state used, where
-        the channel is an :math:`i \times j` matrix with :math:`i` rows
-        corresponding to the receivers and :math:`j` columns to the transmitters,
-        and channel power is a number.
+        Two-tuple of channel and channel power, where the channel is an 
+        :math:`i \times j` matrix with :math:`i` rows corresponding to the 
+        receivers and :math:`j` columns to the transmitters, and channel power 
+        is a number.
 
     """
 
     if num_receivers < 1 or num_transmitters < 1:
         raise ValueError('At least one receiver and one transmitter are required.')
-    #random_state = np.random.RandomState(10) ##DEBUG
+    
     channel_power = num_transmitters
-    if not random_state:
-        random_state = np.random.RandomState(10)
-    elif type(random_state) is not np.random.mtrand.RandomState:
-        random_state = np.random.RandomState(random_state)
 
+    random_state = make_random_state(random_state)
+    
     if F_distribution is None:
         F_distribution = ('normal', 'complex')
     elif type(F_distribution) is not tuple or len(F_distribution) != 2:
@@ -432,7 +440,7 @@ def create_channel(num_receivers: int = 1, num_transmitters: int = 1,
         channel_power *= np.mean(np.sum(attenuation_matrix*attenuation_matrix,
                                         axis=0))/num_receivers
 
-    return F, channel_power, random_state
+    return F, channel_power
 
 def _constellation_properties(modulation):
     """Return bits per symbol, symbol amplitudes, and mean power for QAM constellation.
@@ -473,8 +481,7 @@ def _create_transmitted_symbols(num_transmitters,
 
     Returns:
 
-        Two-tuple of symbols and the random state used, where the symbols is
-        a column vector of length ``num_transmitters``.
+        Symbols, as a column vector of length ``num_transmitters``.
 
     """
 
@@ -483,8 +490,7 @@ def _create_transmitted_symbols(num_transmitters,
     if any(np.modf(amps)[0]):
         raise ValueError('Amplitudes must have integer values')
 
-    if type(random_state) is not np.random.mtrand.RandomState:
-        random_state = np.random.RandomState(random_state)
+    random_state = make_random_state(random_state)
 
     if quadrature == False:
         transmitted_symbols = random_state.choice(amps, size=(num_transmitters, 1))
@@ -492,7 +498,7 @@ def _create_transmitted_symbols(num_transmitters,
         transmitted_symbols = random_state.choice(amps, size=(num_transmitters, 1)) \
             + 1j*random_state.choice(amps, size=(num_transmitters, 1))
 
-    return transmitted_symbols, random_state
+    return transmitted_symbols
 
 def _create_signal(F, transmitted_symbols=None, channel_noise=None,
                   SNRb=float('Inf'), modulation='BPSK', channel_power=None,
@@ -540,10 +546,7 @@ def _create_signal(F, transmitted_symbols=None, channel_noise=None,
     num_receivers = F.shape[0]
     num_transmitters = F.shape[1]
 
-    if not random_state:
-        random_state = np.random.RandomState(10)
-    elif type(random_state) is not np.random.mtrand.RandomState:
-        random_state = np.random.RandomState(random_state)
+    random_state = make_random_state(random_state)
 
     bits_per_transmitter, amps, constellation_mean_power = _constellation_properties(modulation)
 
@@ -557,7 +560,7 @@ def _create_signal(F, transmitted_symbols=None, channel_noise=None,
             random_state = np.random.RandomState(random_state)
 
         quadrature = False if modulation == 'BPSK' else True
-        transmitted_symbols, random_state = _create_transmitted_symbols(
+        transmitted_symbols = _create_transmitted_symbols(
                 num_transmitters, amps=amps, quadrature=quadrature, random_state=random_state)
 
     if SNRb <= 0:
@@ -590,10 +593,8 @@ def _create_signal(F, transmitted_symbols=None, channel_noise=None,
 
     return y, transmitted_symbols, channel_noise, random_state
 
-# JP: Leave remainder untouched for next PRs to avoid conflicts before this is merged
-#     Next PR should bring in commit https://github.com/jackraymond/dimod/commit/ef99d2ae1c364f2066018046a0ece977443b229e
-
-def spin_encoded_mimo(modulation: str, y: Union[np.array, None] = None,
+def spin_encoded_mimo(modulation: str, 
+                      y: Union[np.array, None] = None,
                       F: Union[np.array, None] = None,
                       *,
                       transmitted_symbols: Union[np.array, None] = None,
@@ -605,7 +606,14 @@ def spin_encoded_mimo(modulation: str, y: Union[np.array, None] = None,
                       F_distribution: Union[None, tuple] = None,
                       use_offset: bool = False,
                       attenuation_matrix = None) -> dimod.BinaryQuadraticModel:
-    """ Generate a multi-input multiple-output (MIMO) channel-decoding problem.
+    """Generate a multi-input multiple-output (MIMO) channel-decoding problem.
+
+    Users transmit complex-valued symbols over a random channel, :math:`F`, 
+    to some number of receivers, subject to additive white Gaussian noise. 
+    For a received signal, :math:`y`, the log likelihood of a symbol set, 
+    :math:`v`, is given by :math:`argmin || y - F v ||_2`. For :math:`v` 
+    encoded as a linear sum of spins, the optimization problem can be 
+    represented as a binary quadratic model (BQM).
 
     In radio networks, `MIMO <https://en.wikipedia.org/wiki/MIMO>`_ is a method 
     of increasing link capacity by using multiple transmission and receiving 
@@ -620,136 +628,169 @@ def spin_encoded_mimo(modulation: str, y: Union[np.array, None] = None,
     Access _[#T02, #R20], 5G communication network problems _[#Prince], or others.
 
     Args:
-        y: A complex or real valued signal in the form of a numpy array. If not
-            provided, generated from other arguments.
+        y: Complex- or real-valued received signal, as a NumPy array. If 
+            ``None``, generated from other arguments.
 
-        F: A complex or real valued channel in the form of a numpy array. If not
-           provided, generated from other arguments. Note that for correct interpretation
-           of SNRb, the channel power should be normalized to num_transmitters.
+        F: Complex- or real-valued channel, as a NumPy array. If ``None``, 
+            generated from other arguments. Note that for correct interpretation
+            of SNRb, channel power should be normalized to ``num_transmitters``.
 
-        modulation: Specifies the constellation (symbol set) in use by
-            each user. Symbols are assumed to be transmitted with equal probability.
-            Options are:
-               * 'BPSK'
-                   Binary Phase Shift Keying. Transmitted symbols are +1, -1;
-                   no encoding is required.
-                   A real valued channel is assumed.
+        modulation: Constellation (symbol set) users can transmit. Symbols are 
+            assumed to be transmitted with equal probability. Supported values 
+            are:
 
-               * 'QPSK'
-                   Quadrature Phase Shift Keying.
-                   Transmitted symbols are +1, -1, +1j, -1j;
-                   spins are encoded as a real vector concatenated with an imaginary vector.
+            * 'BPSK'
 
-               * '16QAM'
-                   Each user is assumed to select independently from 16 symbols.
-                   The transmitted symbol is a complex value that can be encoded by two spins
-                   in the imaginary part, and two spins in the real part. v = 2 s_1 + s_2.
-                   Highest precision real and imaginary spin vectors, are concatenated to
-                   lower precision spin vectors.
+                Binary Phase Shift Keying. Transmitted symbols are :math:`+1, -1`;
+                no encoding is required. A real-valued channel is assumed.
 
-               * '64QAM'
-                   A QPSK symbol set is generated, symbols are further amplitude modulated
-                   by an independently and uniformly distributed random amount from [1, 3].
+            * 'QPSK'
 
-        num_transmitters: Number of users. Since each user transmits 1 symbol per frame, also the
-             number of transmitted symbols, must be consistent with F argument.
+                Quadrature Phase Shift Keying. Transmitted symbols are 
+                :math:`1+1j, 1-1j, -1+1j, -1-1j` normalized by 
+                :math:`\\frac{1}{\\sqrt{2}}`. spins are encoded as a real vector 
+                concatenated with an imaginary vector.
 
-        num_receivers: Num_Receivers of channel, :code:`len(y)`. Must be consistent with y argument.
+            * '16QAM'
 
-        SNRb: Signal to noise ratio per bit on linear scale. When y is not provided, this is used
-            to generate the noisy signal. In the case float('Inf') no noise is
-            added. SNRb = Eb/N0, where Eb is the energy per bit, and N0 is the one-sided
-            power-spectral density. A one-sided . N0 is typically kB T at the receiver.
-            To convert units of dB to SNRb use SNRb=10**(SNRb[decibells]/10).
+                Each user is assumed to select independently from 16 symbols.
+                The transmitted symbol is a complex value that can be encoded 
+                by two spins in the imaginary part and two spins in the real 
+                part. Highest precision real and imaginary spin vectors are 
+                concatenated to lower precision spin vectors.
 
+            * '64QAM'
+
+                A QPSK symbol set is generated and symbols are further amplitude 
+                modulated by an independently and uniformly distributed random 
+                amount from :math:`[1, 3]`.
+
+            * '256QAM'
+
+                A QPSK symbol set is generated and symbols are further amplitude 
+                modulated by an independently and uniformly distributed random 
+                amount from :math:`[1, 3, 5]`.
+
+        num_transmitters: Number of users. Each user transmits one symbol per 
+            frame.
+
+        num_receivers: Number of receivers of a channel. Must be consistent 
+            with the length of any provided signal, ``len(y)``.
+
+        SNRb: Signal-to-noise ratio per bit used to generate the noisy signal 
+            when ``y`` is not provided. If ``float('Inf')``, no noise is
+            added. 
+            
+            :math:`SNR_b = E_b/N_0`, where :math:`E_b` is energy per bit, 
+            and :math:`N_0` is the one-sided power-spectral density. :math:`N_0` 
+            is typically :math:`k_B T` at the receiver. To convert units of 
+            :math:`dB` to :math:`SNR_b` use :math:`SNRb=10^{SNR_b[decibels]/10}`.
+
+        seed: Random seed, as an integer, or state, as a 
+            :class:`numpy.random.RandomState` instance.   
+            
         transmitted_symbols:
-            The set of symbols transmitted, this argument is used in combination with F
-            to generate the signal y.
-            For BPSK and QPSK modulations the statistics
-            of the ensemble are unimpacted by the choice (all choices are equivalent
-            subject to spin-reversal transform). If the argument is None, symbols are
-            chosen as 1 or 1 + 1j for all users, respectively for BPSK and QPSK.
-            For QAM modulations, amplitude randomness impacts the likelihood in a
-            non-trivial way. If the argument is None in these cases, symbols are
-            chosen i.i.d. from the appropriate constellation. Note that, for correct
-            analysis of some solvers in BPSK and QPSK cases it is necessary to apply
-            a spin-reversal transform.
+            Set of symbols transmitted. Used in combination with ``F`` to 
+            generate the received signal, :math:`y`. The number of transmitted 
+            symbols must be consistent with ``F``.
+            
+            For BPSK and QPSK modulations, statistics of the ensemble do not 
+            depend on the choice: all choices are equivalent. By default, 
+            symbols are chosen for all users as :math:`1` or :math:`1 + 1j`, 
+            respectively. Note that for correct analysis by some solvers, applying 
+            spin-reversal transforms may be necessary.
+            
+            For QAM modulations, amplitude randomness affects likelihood in a 
+            non-trivial way. By default, symbols are chosen independently and 
+            identically distributed from the constellations. 
+
+        channel_noise: Channel noise as a NumPy array of complex values. Must 
+            be consistent with the number of receivers. 
 
         F_distribution:
-           When F is None, this argument describes the zero-mean variance 1
-           distribution used to sample each element in F. Permitted values are in
-           tuple form: (str, str). The first string is either
-           'normal' or 'binary'. The second string is either 'real' or 'complex'.
-           For large num_receivers and number of users the statistical properties of
-           the likelihood are weakly dependent on the first argument. Choosing
-           'binary' allows for integer valued Hamiltonians, 'normal' is a more
-           standard model. The channel can be real or complex. In many cases this
-           also represents a superficial distinction up to rescaling. For real
-           valued symbols (BPSK) the default is ('normal', 'real'), otherwise it
-           is ('normal', 'complex')
+            Zero-mean, variance-one distribution, in tuple form 
+            ``(distribution, type)``, used to generate each element in ``F`` 
+            when ``F`` is not provided . Supported values are:
+            
+                * ``'normal'`` or ``'binary'`` for the distribution 
+                * ``'real'`` or ``'complex'`` for the type 
+
+            For large numbers of receivers and transmitters, statistical 
+            properties of the likelihood are weakly dependent on the 
+            distribution. Choosing ``'binary'`` allows for integer-valued 
+            Hamiltonians while ``'normal'`` is a more typical model. The channel 
+            can be real or complex; in many cases this represents a superficial 
+            distinction up to rescaling. For real-valued symbols (BPSK) the 
+            default is ``('normal', 'real')``; otherwise, the default is 
+            ``('normal', 'complex')``. 
 
         use_offset:
-           When True, a constant is added to the Ising model energy so that
-           the energy evaluated for the transmitted symbols is zero. At sufficiently
-           high num_receivers/user ratio, and signal to noise ratio, this will
-           be the ground state energy with high probability.
+           Adds a constant to the Ising model energy so that the energy 
+           evaluated for the transmitted symbols is zero. At sufficiently
+           high ratios of receivers to users, and with high signal-to-noise 
+           ratio, this is with high probability the ground-state energy.
 
         attenuation_matrix:
            Root power associated to variable to chip communication; use
            for sparse and structured codes.
 
     Returns:
-        The binary quadratic model defining the log-likelihood function
+        Binary quadratic model defining the log-likelihood function.
 
     Example:
 
-        Generate an instance of a CDMA problem in the high-load regime, near a first order
-        phase transition _[#T02, #R20]:
+        This example generates an instance of a CDMA problem in the high-load 
+        regime, near a first-order phase transition.
 
         >>> num_transmitters = 64
         >>> transmitters_per_receiver = 1.5
         >>> SNRb = 5
-        >>> bqm = dimod.generators.spin_encoded_mimo(modulation='BPSK', num_transmitters = 64, \
-                      num_receivers = round(num_transmitters/transmitters_per_receiver), \
-                      SNRb=SNRb, \
-                      F_distribution = ('binary', 'real'))
-
+        >>> bqm = dimod.generators.spin_encoded_mimo(modulation='BPSK', 
+        ...     num_transmitters = 64, 
+        ...     num_receivers = round(num_transmitters/transmitters_per_receiver), 
+        ...     SNRb=SNRb, 
+        ...     F_distribution = ('binary', 'real'))
 
     .. [#T02] T. Tanaka IEEE TRANSACTIONS ON INFORMATION THEORY, VOL. 48, NO. 11, NOVEMBER 2002
-    .. [#R20] J. Raymond, N. Ndiaye, G. Rayaprolu and A. D. King, "Improving performance of logical qubits by parameter tuning and topology compensation, " 2020 IEEE International Conference on Quantum Computing and Engineering (QCE), Denver, CO, USA, 2020, pp. 295-305, doi: 10.1109/QCE49297.2020.00044.
+
+    .. [#R20] J. Raymond, N. Ndiaye, G. Rayaprolu and A. D. King, 
+        "Improving performance of logical qubits by parameter tuning and topology compensation," 
+        2020 IEEE International Conference on Quantum Computing and Engineering (QCE), 
+        Denver, CO, USA, 2020, pp. 295-305, doi: 10.1109/QCE49297.2020.00044.
+
     .. [#Prince] Various (https://paws.princeton.edu/)
     """
 
-    if num_transmitters is None:
-        if F is not None:
-            num_transmitters = F.shape[1]
-        elif transmitted_symbols is not None:
-            num_transmitters = len(transmitted_symbols)
-        else:
-            raise ValueError('num_transmitters is not specified and cannot'
-                                 'be inferred from F or transmitted_symbols (both None)')
-    if num_receivers is None:
-        if F is not None:
-            num_receivers = F.shape[0]
-        elif y is not None:
-            num_receivers = y.shape[0]
-        elif channel_noise is not None:
-            num_receivers = channel_noise.shape[0]
-        else:
-            raise ValueError('num_receivers is not specified and cannot'
-                             'be inferred from F, y or channel_noise (all None)')
-
-    assert num_transmitters > 0, "Expect positive number of transmitters"
-    assert num_receivers > 0, "Expect positive number of receivers"
+    random_state = make_random_state(seed)
 
     if F is None:
-        F, channel_power, seed = create_channel(num_receivers=num_receivers,
+
+        if num_transmitters:
+            if num_transmitters <= 0:
+                raise ValueError('Configured number of transmitters must be positive')
+        elif transmitted_symbols:
+            num_transmitters = len(transmitted_symbols)
+        else:
+           ValueError('`num_transmitters` is not specified and cannot'
+                'be inferred from `F` or `transmitted_symbols` (both None)') 
+           
+        if num_receivers:
+            if num_receivers <= 0:
+                raise ValueError('Configured number of receivers must be positive')
+        elif y:
+            num_receivers = y.shape[0]
+        elif channel_noise:
+            num_receivers = channel_noise.shape[0]  
+        else:
+            raise ValueError('`num_receivers` is not specified and cannot'
+                'be inferred from `F`, `y` or `channel_noise` (all None)')  
+
+        F, channel_power = create_channel(num_receivers=num_receivers,
                                                 num_transmitters=num_transmitters,
                                                 F_distribution=F_distribution,
-                                                random_state=seed,
+                                                random_state=random_state,
                                                 attenuation_matrix=attenuation_matrix)
-        # Channel power is the value relative to an assumed
-        # normalization E[Fui* Fui] = 1
+
     else:
         channel_power = num_transmitters
 
@@ -759,7 +800,7 @@ def spin_encoded_mimo(modulation: str, y: Union[np.array, None] = None,
                                     channel_noise=channel_noise,
                                     SNRb=SNRb, modulation=modulation,
                                     channel_power=channel_power,
-                                    random_state=seed)
+                                    random_state=random_state)
 
     h, J, offset = _yF_to_hJ(y, F, modulation)
 
